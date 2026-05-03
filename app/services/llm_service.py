@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import AsyncIterator, List, Literal, Optional
 
@@ -34,18 +35,35 @@ class EstimationOutcome:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    response_time_seconds: Optional[float] = None
 
 
-def build_system_prompt() -> str:
-    """Instrucciones de rol + ejemplos históricos inyectados (mensaje *system*)."""
-    blocks: List[str] = [_SYSTEM_ROLE.strip(), "## Estimaciones de referencia (contexto CAG)"]
+def get_system_role_prompt() -> str:
+    """Texto de instrucciones de rol enviado al inicio del mensaje *system* (sin ejemplos CAG)."""
+    return _SYSTEM_ROLE.strip()
+
+
+def format_cag_examples_block() -> str:
+    """Bloque de ejemplos de estimación inyectados como contexto CAG (mismo formato que en el *system*)."""
+    parts: List[str] = []
     for i, ex in enumerate(ESTIMATION_EXAMPLES, start=1):
-        blocks.append(
+        parts.append(
             f"### Ejemplo {i}\n"
             f"**Resumen de la reunión original:**\n{ex['meeting_summary'].strip()}\n\n"
             f"**Estimación generada entonces:**\n{ex['estimation'].strip()}"
         )
-    return "\n\n".join(blocks)
+    return "\n\n".join(parts)
+
+
+def build_system_prompt() -> str:
+    """Instrucciones de rol + ejemplos históricos inyectados (mensaje *system*)."""
+    return "\n\n".join(
+        [
+            get_system_role_prompt(),
+            "## Estimaciones de referencia (contexto CAG)",
+            format_cag_examples_block(),
+        ]
+    )
 
 
 def _resolve_model(cfg: Settings) -> str:
@@ -78,6 +96,7 @@ def _anthropic_text_content(message: object) -> str:
 async def _call_openai(cfg: Settings, system_prompt: str, user_transcript: str) -> EstimationOutcome:
     client = AsyncOpenAI(api_key=cfg.openai_api_key)
     model = _resolve_model(cfg)
+    t0 = time.perf_counter()
     completion = await client.chat.completions.create(
         model=model,
         messages=[
@@ -94,6 +113,7 @@ async def _call_openai(cfg: Settings, system_prompt: str, user_transcript: str) 
     prompt_t = getattr(usage, "prompt_tokens", None) if usage else None
     completion_t = getattr(usage, "completion_tokens", None) if usage else None
     total_t = getattr(usage, "total_tokens", None) if usage else None
+    elapsed = time.perf_counter() - t0
     return EstimationOutcome(
         estimation=text,
         model=model,
@@ -101,6 +121,7 @@ async def _call_openai(cfg: Settings, system_prompt: str, user_transcript: str) 
         input_tokens=prompt_t,
         output_tokens=completion_t,
         total_tokens=total_t,
+        response_time_seconds=elapsed,
     )
 
 
@@ -120,6 +141,7 @@ async def _stream_openai(
         "temperature": 0.3,
         "stream": True,
     }
+    t0 = time.perf_counter()
     try:
         stream = await client.chat.completions.create(**kwargs, stream_options={"include_usage": True})
     except TypeError:
@@ -147,6 +169,7 @@ async def _stream_openai(
     text = "".join(parts).strip()
     if not text:
         raise RuntimeError("OpenAI devolvió contenido vacío")
+    elapsed = time.perf_counter() - t0
     outcome_holder.clear()
     outcome_holder.append(
         EstimationOutcome(
@@ -156,6 +179,7 @@ async def _stream_openai(
             input_tokens=prompt_t,
             output_tokens=completion_t,
             total_tokens=total_t,
+            response_time_seconds=elapsed,
         )
     )
 
@@ -163,6 +187,7 @@ async def _stream_openai(
 async def _call_anthropic(cfg: Settings, system_prompt: str, user_transcript: str) -> EstimationOutcome:
     client = AsyncAnthropic(api_key=cfg.anthropic_api_key)
     model = _resolve_model(cfg)
+    t0 = time.perf_counter()
     message = await client.messages.create(
         model=model,
         max_tokens=8192,
@@ -177,6 +202,7 @@ async def _call_anthropic(cfg: Settings, system_prompt: str, user_transcript: st
     in_t = getattr(usage, "input_tokens", None) if usage else None
     out_t = getattr(usage, "output_tokens", None) if usage else None
     total = (in_t + out_t) if in_t is not None and out_t is not None else None
+    elapsed = time.perf_counter() - t0
     return EstimationOutcome(
         estimation=text,
         model=model,
@@ -184,6 +210,7 @@ async def _call_anthropic(cfg: Settings, system_prompt: str, user_transcript: st
         input_tokens=in_t,
         output_tokens=out_t,
         total_tokens=total,
+        response_time_seconds=elapsed,
     )
 
 
@@ -192,6 +219,7 @@ async def _stream_anthropic(
 ) -> AsyncIterator[str]:
     client = AsyncAnthropic(api_key=cfg.anthropic_api_key)
     model = _resolve_model(cfg)
+    t0 = time.perf_counter()
     async with client.messages.stream(
         model=model,
         max_tokens=8192,
@@ -203,6 +231,7 @@ async def _stream_anthropic(
             yield text
         message = await stream.get_final_message()
 
+    elapsed = time.perf_counter() - t0
     text = _anthropic_text_content(message)
     if not text:
         raise RuntimeError("Anthropic devolvió contenido vacío")
@@ -219,6 +248,7 @@ async def _stream_anthropic(
             input_tokens=in_t,
             output_tokens=out_t,
             total_tokens=total,
+            response_time_seconds=elapsed,
         )
     )
 

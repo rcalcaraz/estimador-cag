@@ -8,22 +8,81 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.services.llm_service import EstimationOutcome, stream_estimation_text
+from app.services.llm_service import (
+    EstimationOutcome,
+    build_system_prompt,
+    format_cag_examples_block,
+    stream_estimation_text,
+)
 
 
 def _init_session_state() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "last_llm_outcome" not in st.session_state:
+        st.session_state.last_llm_outcome = None
+
+
+def _format_token_value(value: int | None) -> str:
+    if value is None:
+        return "—"
+    return f"{value:,}".replace(",", ".")
+
+
+def _render_cag_sidebar() -> None:
+    st.sidebar.header("Transparencia CAG")
+    st.sidebar.caption(
+        "El mensaje *system* incluye rol y ejemplos de referencia; tu transcripción va en el mensaje de usuario."
+    )
+
+    with st.sidebar.expander("System prompt activo (solo lectura)", expanded=False):
+        st.text_area(
+            "system_prompt_full",
+            value=build_system_prompt(),
+            height=260,
+            disabled=True,
+            label_visibility="collapsed",
+        )
+
+    with st.sidebar.expander("Contexto estático: ejemplos de estimación", expanded=False):
+        st.text_area(
+            "cag_examples",
+            value=format_cag_examples_block(),
+            height=320,
+            disabled=True,
+            label_visibility="collapsed",
+        )
+
+    st.sidebar.subheader("Última llamada al modelo")
+    outcome: EstimationOutcome | None = st.session_state.last_llm_outcome
+    if outcome is None:
+        st.sidebar.info("Aún no hay una respuesta completada en esta sesión.")
+        return
+
+    st.sidebar.metric("Modelo", outcome.model)
+    st.sidebar.caption(f"Proveedor: **{outcome.provider}**")
+    c1, c2 = st.sidebar.columns(2)
+    c1.metric("Tokens entrada", _format_token_value(outcome.input_tokens))
+    c2.metric("Tokens salida", _format_token_value(outcome.output_tokens))
+    if outcome.total_tokens is not None:
+        st.sidebar.caption(f"Total tokens (reportado): {_format_token_value(outcome.total_tokens)}")
+    if outcome.response_time_seconds is not None:
+        t = outcome.response_time_seconds
+        st.sidebar.metric(
+            "Tiempo de respuesta",
+            f"{t:.2f} s" if t < 60 else f"{t / 60:.1f} min",
+        )
 
 
 def main() -> None:
-    st.set_page_config(page_title="Estimador CAG", page_icon="📋", layout="centered")
+    st.set_page_config(page_title="Estimador CAG", page_icon="📋", layout="wide")
     st.title("Estimador de software (CAG)")
     st.caption(
         "Pega o escribe una transcripción de reunión para obtener una estimación de software."
     )
 
     _init_session_state()
+    _render_cag_sidebar()
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -52,11 +111,7 @@ def main() -> None:
                 st.markdown(reply)
             else:
                 if outcome_holder:
-                    o = outcome_holder[0]
-                    meta = f"*Modelo: `{o.model}` · Proveedor: {o.provider}*"
-                    if o.total_tokens is not None:
-                        meta += f" · Tokens: {o.total_tokens}"
-                    st.caption(meta)
+                    st.session_state.last_llm_outcome = outcome_holder[0]
 
             st.session_state.messages.append({"role": "assistant", "content": reply})
 
