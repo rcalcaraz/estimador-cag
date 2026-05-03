@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import AsyncIterator, List, Literal, Optional
 
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
@@ -104,6 +104,62 @@ async def _call_openai(cfg: Settings, system_prompt: str, user_transcript: str) 
     )
 
 
+async def _stream_openai(
+    cfg: Settings, system_prompt: str, user_transcript: str, outcome_holder: List[EstimationOutcome]
+) -> AsyncIterator[str]:
+    """Emite fragmentos de texto y deja el resultado final en *outcome_holder* (un solo elemento)."""
+    client = AsyncOpenAI(api_key=cfg.openai_api_key)
+    model = _resolve_model(cfg)
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_transcript},
+    ]
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.3,
+        "stream": True,
+    }
+    try:
+        stream = await client.chat.completions.create(**kwargs, stream_options={"include_usage": True})
+    except TypeError:
+        stream = await client.chat.completions.create(**kwargs)
+
+    parts: List[str] = []
+    prompt_t: Optional[int] = None
+    completion_t: Optional[int] = None
+    total_t: Optional[int] = None
+
+    async for chunk in stream:
+        choices = chunk.choices or []
+        if choices:
+            delta = choices[0].delta
+            piece = (delta.content or "") if delta and delta.content is not None else ""
+            if piece:
+                parts.append(piece)
+                yield piece
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            prompt_t = getattr(usage, "prompt_tokens", None)
+            completion_t = getattr(usage, "completion_tokens", None)
+            total_t = getattr(usage, "total_tokens", None)
+
+    text = "".join(parts).strip()
+    if not text:
+        raise RuntimeError("OpenAI devolvió contenido vacío")
+    outcome_holder.clear()
+    outcome_holder.append(
+        EstimationOutcome(
+            estimation=text,
+            model=model,
+            provider="openai",
+            input_tokens=prompt_t,
+            output_tokens=completion_t,
+            total_tokens=total_t,
+        )
+    )
+
+
 async def _call_anthropic(cfg: Settings, system_prompt: str, user_transcript: str) -> EstimationOutcome:
     client = AsyncAnthropic(api_key=cfg.anthropic_api_key)
     model = _resolve_model(cfg)
@@ -129,6 +185,70 @@ async def _call_anthropic(cfg: Settings, system_prompt: str, user_transcript: st
         output_tokens=out_t,
         total_tokens=total,
     )
+
+
+async def _stream_anthropic(
+    cfg: Settings, system_prompt: str, user_transcript: str, outcome_holder: List[EstimationOutcome]
+) -> AsyncIterator[str]:
+    client = AsyncAnthropic(api_key=cfg.anthropic_api_key)
+    model = _resolve_model(cfg)
+    async with client.messages.stream(
+        model=model,
+        max_tokens=8192,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_transcript}],
+        temperature=0.3,
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
+        message = await stream.get_final_message()
+
+    text = _anthropic_text_content(message)
+    if not text:
+        raise RuntimeError("Anthropic devolvió contenido vacío")
+    usage = getattr(message, "usage", None)
+    in_t = getattr(usage, "input_tokens", None) if usage else None
+    out_t = getattr(usage, "output_tokens", None) if usage else None
+    total = (in_t + out_t) if in_t is not None and out_t is not None else None
+    outcome_holder.clear()
+    outcome_holder.append(
+        EstimationOutcome(
+            estimation=text,
+            model=model,
+            provider="anthropic",
+            input_tokens=in_t,
+            output_tokens=out_t,
+            total_tokens=total,
+        )
+    )
+
+
+async def stream_estimation_text(
+    meeting_transcript: str,
+    *,
+    cfg: Settings | None = None,
+    outcome_holder: List[EstimationOutcome],
+) -> AsyncIterator[str]:
+    """
+    Igual que `generate_estimation`, pero emite la estimación por fragmentos (streaming).
+
+    Tras consumir el iterador, el resultado completo y metadatos quedan en *outcome_holder*
+    (se reemplaza por un único elemento).
+    """
+    text = (meeting_transcript or "").strip()
+    if not text:
+        raise ValueError("La transcripción de la reunión no puede estar vacía")
+
+    settings = cfg or get_settings()
+    _require_api_key(settings)
+    system_prompt = build_system_prompt()
+
+    if settings.llm_provider == "openai":
+        async for piece in _stream_openai(settings, system_prompt, text, outcome_holder):
+            yield piece
+    else:
+        async for piece in _stream_anthropic(settings, system_prompt, text, outcome_holder):
+            yield piece
 
 
 async def generate_estimation(

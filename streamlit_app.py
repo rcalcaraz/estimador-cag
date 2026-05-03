@@ -6,11 +6,9 @@ Las claves API se leen de variables de entorno / .env (pydantic-settings), igual
 
 from __future__ import annotations
 
-import asyncio
-
 import streamlit as st
 
-from app.services.llm_service import generate_estimation
+from app.services.llm_service import EstimationOutcome, stream_estimation_text
 
 
 def _init_session_state() -> None:
@@ -37,21 +35,27 @@ def main() -> None:
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Generando estimación…"):
-                try:
-                    outcome = asyncio.run(generate_estimation(prompt))
-                except ValueError as e:
-                    reply = f"**Error de configuración:** {e}"
-                    st.markdown(reply)
-                except Exception as e:
-                    reply = f"**Error al llamar al proveedor LLM:** {e}"
-                    st.markdown(reply)
-                else:
-                    reply = outcome.estimation
-                    st.markdown(reply)
-                    meta = f"*Modelo: `{outcome.model}` · Proveedor: {outcome.provider}*"
-                    if outcome.total_tokens is not None:
-                        meta += f" · Tokens: {outcome.total_tokens}"
+            outcome_holder: list[EstimationOutcome] = []
+            try:
+                reply = st.write_stream(
+                    stream_estimation_text(prompt, outcome_holder=outcome_holder)
+                )
+                if not reply and outcome_holder:
+                    reply = outcome_holder[0].estimation
+                elif not reply:
+                    reply = ""
+            except ValueError as e:
+                reply = f"**Error de configuración:** {e}"
+                st.markdown(reply)
+            except Exception as e:
+                reply = f"**Error al llamar al proveedor LLM:** {e}"
+                st.markdown(reply)
+            else:
+                if outcome_holder:
+                    o = outcome_holder[0]
+                    meta = f"*Modelo: `{o.model}` · Proveedor: {o.provider}*"
+                    if o.total_tokens is not None:
+                        meta += f" · Tokens: {o.total_tokens}"
                     st.caption(meta)
 
             st.session_state.messages.append({"role": "assistant", "content": reply})
