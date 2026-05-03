@@ -82,7 +82,6 @@ def main() -> None:
     )
 
     _init_session_state()
-    _render_cag_sidebar()
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -114,6 +113,9 @@ def main() -> None:
                     st.session_state.last_llm_outcome = outcome_holder[0]
 
             st.session_state.messages.append({"role": "assistant", "content": reply})
+
+    # Renderizar después del chat para que las métricas reflejen la última respuesta en el mismo rerun.
+    _render_cag_sidebar()
 
 
 if __name__ == "__main__":
