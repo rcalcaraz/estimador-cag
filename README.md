@@ -131,7 +131,7 @@ lsof -iTCP:8000 -sTCP:LISTEN
 
 ## Sin Docker (opcional)
 
-Solo tiene sentido si quieres ejecutar tests, linters o depurar fuera del contenedor. Necesitas **Python ≥ 3.9** y **[uv](https://docs.astral.sh/uv/)**. Para caché, Redis accesible en `localhost:6379` o la URL que pongas en `REDIS_URL`.
+Solo tiene sentido si quieres ejecutar tests, linters o depurar fuera del contenedor (la sección [Tests](#tests) describe cómo lanzar `pytest`). Necesitas **Python ≥ 3.9** y **[uv](https://docs.astral.sh/uv/)**. Para caché, Redis accesible en `localhost:6379` o la URL que pongas en `REDIS_URL`.
 
 ```bash
 cd estimator
@@ -148,12 +148,37 @@ Si cambias `pyproject.toml`, vuelve a ejecutar `uv sync`.
 
 ---
 
+## Tests
+
+La suite usa **pytest** y **fakeredis** (sin Redis real para la mayoría de casos). Las rutas HTTP sustituyen las llamadas al LLM con *fakes*, así que **no** necesitas API keys válidas para pasar los tests: `tests/conftest.py` define valores de entorno de marcador antes de importar la aplicación si aún no existen.
+
+Instala dependencias de desarrollo y ejecuta todos los tests:
+
+```bash
+cd estimator
+uv sync --group dev
+uv run pytest
+```
+
+Útiles durante el desarrollo:
+
+```bash
+uv run pytest -v
+uv run pytest tests/test_health.py
+uv run pytest tests/test_estimate_endpoint.py::test_estimate_returns_200_and_matches_schema -v
+```
+
+Si al lanzar pytest falla la validación de Settings por claves vacías en tu `.env`, asegúrate de que `OPENAI_API_KEY` y/o `ANTHROPIC_API_KEY` no estén definidas como cadenas vacías, o usa solo el entorno que rellena `conftest.py` (sin `.env` conflictivo en esas variables).
+
+---
+
 ## Estructura del proyecto
 
 ```text
 estimator/
 ├── Dockerfile / docker-compose.yml
 ├── streamlit_app.py          # Formulario web → POST /api/v1/estimate
+├── tests/                    # pytest (salud, caché, wrapper LLM, router estimaciones)
 └── app/
     ├── main.py               # FastAPI y rutas base
     ├── config.py             # Ajustes desde .env
