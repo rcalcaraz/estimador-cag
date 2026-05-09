@@ -7,7 +7,8 @@ Además incluye una **interfaz de chat con Streamlit** (`streamlit_app.py`) que 
 ## Requisitos
 
 - Python 3.9 o superior (`requires-python` en `pyproject.toml`)
-- [uv](https://docs.astral.sh/uv/) para instalar dependencias y ejecutar comandos del proyecto
+- [uv](https://docs.astral.sh/uv/) para instalar dependencias y ejecutar comandos del proyecto en local
+- **Docker** y **Docker Compose** (opcional) para ejecutar la API y, si quieres, Streamlit en contenedores
 
 ## Instalación
 
@@ -15,6 +16,34 @@ Además incluye una **interfaz de chat con Streamlit** (`streamlit_app.py`) que 
 cd estimator
 uv sync
 ```
+
+## Docker
+
+En la raíz de `estimator/` hay un **Dockerfile** multi-stage (Python 3.11, [uv](https://docs.astral.sh/uv/)) y un **`docker-compose.yml`** orientado a desarrollo: monta `app/` y `streamlit_app.py` y arranca **uvicorn con `--reload`**.
+
+1. Copia y rellena `.env` (igual que en local):
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Solo la **API** (puerto **8000**):
+
+   ```bash
+   docker compose up --build
+   ```
+
+3. API **y** interfaz **Streamlit** (puerto **8501**), con el perfil `ui`:
+
+   ```bash
+   docker compose --profile ui up --build
+   ```
+
+- Documentación de la API en contenedor: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Streamlit (si activas el perfil): [http://localhost:8501](http://localhost:8501)
+- El compose usa `env_file: .env` para las mismas variables que en `app/config.py`.
+
+**Producción:** quita los volúmenes que montan el código y el `command` con `--reload`; deja el `CMD` por defecto del Dockerfile (`uvicorn` sin reload). El `HEALTHCHECK` de la imagen consulta `GET /health`.
 
 ## Variables de entorno
 
@@ -29,7 +58,7 @@ Copia `.env.example` a `.env` y rellena los valores. El archivo **`.env` está e
 | `APP_ENV` | Entorno de ejecución | `development` |
 | `LOG_LEVEL` | Nivel de logging | `DEBUG` |
 
-La carga real la hace **`app/config.py`** con Pydantic `BaseSettings` y `env_file=".env"`. Ejecuta siempre el servidor **desde la raíz del proyecto** (`estimator/`) para que se encuentre el `.env`.
+La carga real la hace **`app/config.py`** con Pydantic `BaseSettings` y `env_file=".env"`. En local, ejecuta siempre los comandos **desde la raíz del proyecto** (`estimator/`) para que se encuentre el `.env`. Con Docker, las variables se inyectan vía `env_file` del compose.
 
 ## Arranque en desarrollo
 
@@ -72,6 +101,8 @@ Por defecto Streamlit suele abrir en [http://localhost:8501](http://localhost:85
 uv run streamlit run streamlit_app.py --server.port 8502
 ```
 
+Con **Docker**, puedes levantar la misma UI con `docker compose --profile ui up --build` (puerto **8501** en el host).
+
 ## API
 
 | Método | Ruta | Descripción |
@@ -90,6 +121,9 @@ curl -sS -X POST "http://127.0.0.1:8000/api/v1/estimate" \
 ## Estructura del código
 
 ```text
+Dockerfile                  # Imagen multi-stage (uv, solo dependencias de prod)
+docker-compose.yml          # API en 8000; Streamlit opcional con perfil ui
+.dockerignore               # Contexto de build (excluye .venv, .env, tests, etc.)
 streamlit_app.py            # UI Streamlit: chat + sidebar CAG / métricas
 app/
 ├── main.py                 # FastAPI: título/descripción, router, /health
