@@ -8,9 +8,9 @@ Las llamadas al modelo pasan por un **wrapper LiteLLM** (`app/services/llm_wrapp
 
 La forma prevista de ejecutar el proyecto es **con Docker**: misma versión de Python y dependencias para todo el mundo, sin instalar `uv` ni un virtualenv en la máquina host.
 
-Opcionalmente hay una **interfaz de chat** con Streamlit (perfil `ui` en Compose): mismos ajustes que la API, respuesta en streaming y panel lateral con el contexto enviado al modelo y métricas (tokens, tiempo).
+Opcionalmente hay una **interfaz de chat** con Streamlit (perfil `ui` en Compose): mismos ajustes que la API, respuesta en streaming y panel lateral con el contexto enviado al modelo, métricas de tokens y tiempo, indicación de si la respuesta vino de **caché Redis** y coste estimado cuando aplica.
 
-**Redis** es **opcional**: la app sigue respondiendo sin Redis; solo pierdes la caché (más coste y latencia en peticiones repetidas). Puedes levantar Redis con un **perfil de Compose** (`redis`), igual que la UI usa el perfil `ui`, o con un contenedor suelto en local.
+**Redis** arranca **siempre** con Compose: la API y Streamlit usan **`REDIS_URL=redis://redis:6379`** en la red Docker (el `docker-compose.yml` lo inyecta y no hace falta cambiar el `.env` para eso). Sin Redis en marcha la caché falla y verás `cache_get_failed` en los logs.
 
 ---
 
@@ -24,40 +24,29 @@ Los comandos de este README se ejecutan desde la carpeta **`estimator/`**, donde
 
 ## Primeros pasos (Docker)
 
-1. Configura las claves y, si usas caché con Docker, la URL de Redis (ver [Redis y caché](#redis-y-caché)):
+1. Configura las claves en `.env` (ver [Variables de entorno](#variables-de-entorno)):
 
    ```bash
    cd estimator
    cp .env.example .env
    ```
 
-   Edita `.env` y pon al menos **una** de `OPENAI_API_KEY` o `ANTHROPIC_API_KEY`. Detalle en [Variables de entorno](#variables-de-entorno).
+   Edita `.env` y pon al menos **una** de `OPENAI_API_KEY` o `ANTHROPIC_API_KEY`.  
+   Para desarrollo **solo en tu máquina** (sin Docker), usa `REDIS_URL=redis://localhost:6379` si tienes Redis local. En Docker Compose **no hace falta** tocar `REDIS_URL`: el compose fuerza `redis://redis:6379`.
 
-2. Solo **API** (puerto **8000**, recarga al cambiar código gracias al volumen de desarrollo):
+2. **API + Redis** (puerto **8000**, recarga al cambiar código gracias al volumen de desarrollo):
 
    ```bash
    docker compose up --build
    ```
 
-3. **API + Streamlit** (UI en puerto **8501**):
+3. **API + Redis + Streamlit** (UI en puerto **8501**):
 
    ```bash
    docker compose --profile ui up --build
    ```
 
-4. **API + Redis** (servicio de caché en la misma red de Compose). Antes, en `.env`, pon **`REDIS_URL=redis://redis:6379`** (nombre del servicio `redis` dentro de Docker):
-
-   ```bash
-   docker compose --profile redis up --build
-   ```
-
-5. **API + Redis + Streamlit** (todo junto):
-
-   ```bash
-   docker compose --profile redis --profile ui up --build
-   ```
-
-6. Documentación interactiva de la API: [http://localhost:8000/docs](http://localhost:8000/docs)  
+4. Documentación interactiva de la API: [http://localhost:8000/docs](http://localhost:8000/docs)  
    Streamlit (si usaste el perfil `ui`): [http://localhost:8501](http://localhost:8501)
 
 El `docker-compose.yml` monta `app/` y `streamlit_app.py` para desarrollo. **Producción:** quita esos volúmenes y el `command` con `--reload`; la imagen usa `uvicorn` sin recarga y un `HEALTHCHECK` sobre `GET /health`.
@@ -68,10 +57,9 @@ Tras cambiar `.env`, reinicia los contenedores (`docker compose down` y vuelve a
 
 ## Redis y caché
 
-- **Sin Redis:** la aplicación funciona; los accesos a caché fallan de forma controlada (solo se pierde deduplicación de respuestas).
-- **Con perfil `redis` en Compose:** arranca el contenedor `redis` y debes usar **`REDIS_URL=redis://redis:6379`** en `.env` para que la API y Streamlit resuelvan el host correcto **dentro** de la red de Docker.
-- **Sin Compose, solo Redis en tu máquina:** por ejemplo `docker run -d --name redis-estimator -p 6379:6379 redis:7-alpine` y en `.env` deja **`REDIS_URL=redis://localhost:6379`** (adecuado también para `uv run uvicorn` en el host).
-- Los perfiles son independientes: **`redis`** solo añade el servicio Redis; **`ui`** solo añade Streamlit. Combínalos como en el apartado anterior.
+- **Con Docker Compose:** el servicio `redis` sube siempre; `estimator` y `streamlit` esperan a que Redis esté sano y reciben **`REDIS_URL=redis://redis:6379`** por variables de entorno del compose (sustituye el `localhost` del `.env`).
+- **Sin Redis** (solo si cae el contenedor o no usas Compose): la aplicación sigue respondiendo; los accesos a caché fallan de forma controlada (`cache_get_failed` en logs).
+- **Sin Compose, en el host:** Redis en `localhost` y en `.env` **`REDIS_URL=redis://localhost:6379`** (adecuado para `uv run uvicorn` / Streamlit en local).
 
 ---
 
@@ -89,7 +77,7 @@ Copia `.env.example` a `.env`. No subas `.env` al repositorio (está ignorado po
 | `LLM_MODEL` | Legado; para configuraciones nuevas usa `PRIMARY_MODEL` / `FALLBACK_MODEL`. |
 | `LLM_TIMEOUT` | Timeout de cada llamada al LLM (segundos). |
 | `LLM_RETRIES` | Reintentos que delega LiteLLM. |
-| `REDIS_URL` | URL de Redis para la caché (`redis://localhost:6379` en local; `redis://redis:6379` con Compose y perfil `redis`). |
+| `REDIS_URL` | URL de Redis (`redis://localhost:6379` en el host; con Docker Compose el `docker-compose.yml` fuerza `redis://redis:6379`). |
 | `CACHE_TTL` | Segundos de vida de cada entrada en caché. |
 | `APP_ENV` | Entorno de ejecución. |
 | `LOG_LEVEL` | Nivel de log, p. ej. `DEBUG`. |

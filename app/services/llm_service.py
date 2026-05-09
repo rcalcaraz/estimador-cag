@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import AsyncIterator, List, Literal, Optional
+from typing import Any, AsyncIterator, List, Literal, Optional
 
 from app.config import Settings, get_settings
 from app.dependencies import get_llm_wrapper
@@ -102,8 +102,8 @@ async def stream_estimation_text(
     """
     Igual que `generate_estimation`, pero emite la estimación por fragmentos (streaming).
 
-    Tras consumir el iterador, el resultado completo y metadatos quedan en *outcome_holder*.
-    Los tokens pueden ser ``None`` si el proveedor no los reporta en modo streaming.
+    Tras consumir el iterador, el resultado completo y metadatos quedan en *outcome_holder*
+    (tokens, caché, coste y modelo efectivo según el wrapper LiteLLM).
     """
     text = (meeting_transcript or "").strip()
     if not text:
@@ -113,6 +113,7 @@ async def stream_estimation_text(
     system_prompt = build_system_prompt()
     wrapper = get_llm_wrapper()
 
+    stream_meta: dict[str, Any] = {}
     t0 = time.perf_counter()
     parts: List[str] = []
 
@@ -122,6 +123,7 @@ async def stream_estimation_text(
         model_override=None,
         max_tokens=DEFAULT_MAX_TOKENS,
         temperature=0.3,
+        stream_meta=stream_meta,
     ):
         parts.append(piece)
         yield piece
@@ -133,16 +135,9 @@ async def stream_estimation_text(
 
     outcome_holder.clear()
     outcome_holder.append(
-        EstimationOutcome(
-            estimation=rendered,
-            model=settings.primary_model,
-            provider="anthropic" if settings.llm_provider == "anthropic" else "openai",
-            input_tokens=None,
-            output_tokens=None,
-            total_tokens=None,
-            response_time_seconds=elapsed,
-            cost_usd=None,
-            cache_hit=False,
+        _wrapper_result_to_outcome(
+            {**stream_meta, "estimation": rendered},
+            elapsed_s=elapsed,
         )
     )
 

@@ -32,6 +32,24 @@ def _normalise_model_name(model: str) -> str:
     return model.split("/", 1)[1] if "/" in model else model
 
 
+def _usage_dict_from_litellm(usage: Any) -> dict[str, int] | None:
+    if usage is None:
+        return None
+    input_tokens = getattr(usage, "prompt_tokens", None)
+    output_tokens = getattr(usage, "completion_tokens", None)
+    if input_tokens is None and output_tokens is None:
+        return None
+    in_t = int(input_tokens or 0)
+    out_t = int(output_tokens or 0)
+    total = getattr(usage, "total_tokens", None)
+    total_t = int(total) if total is not None else in_t + out_t
+    return {
+        "input_tokens": in_t,
+        "output_tokens": out_t,
+        "total_tokens": total_t,
+    }
+
+
 def _provider_from_model(model: str) -> str:
     name = _normalise_model_name(model).lower()
     if name.startswith("claude"):
@@ -169,8 +187,10 @@ class LLMWrapper:
         model_override: str | None = None,
         max_tokens: int = 8192,
         temperature: float = 0.3,
+        stream_meta: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         cache_key_model = model_override or self.primary_model
+        resolved_model = model_override or self.primary_model
         cache_key = EstimationCache.make_key(
             system_prompt=system_prompt,
             user_message=user_message,
@@ -181,6 +201,25 @@ class LLMWrapper:
         cached = self.cache.get(cache_key)
         if cached:
             log.info("stream_cache_hit chars=%s", len(cached.get("estimation", "")))
+            if stream_meta is not None:
+                usage = cached.get("usage") or {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                }
+                model_name = _normalise_model_name(str(cached.get("model", resolved_model)))
+                stream_meta.update(
+                    {
+                        "cache_hit": True,
+                        "model": model_name,
+                        "provider": cached.get("provider")
+                        or _provider_from_model(str(cached.get("model", resolved_model))),
+                        "usage": usage,
+                        "cost_usd": float(cached.get("cost_usd", 0.0)),
+                        "latency_ms": cached.get("latency_ms"),
+                        "finish_reason": cached.get("finish_reason", "stop"),
+                    }
+                )
             yield cached.get("estimation", "")
             return
 
@@ -200,9 +239,17 @@ class LLMWrapper:
         log.info("llm_stream_started model=%s", model_override or self.primary_model)
         t0 = time.perf_counter()
         full_text: list[str] = []
+        stream_usage_raw: Any = None
+        streamed_model: str | None = None
         try:
             response = await self._adispatch(model_override=model_override, **kwargs)
             async for chunk in response:
+                u = getattr(chunk, "usage", None)
+                if u is not None:
+                    stream_usage_raw = u
+                m = getattr(chunk, "model", None)
+                if m:
+                    streamed_model = m
                 delta = _extract_delta(chunk)
                 if delta:
                     full_text.append(delta)
@@ -216,18 +263,36 @@ class LLMWrapper:
         rendered = "".join(full_text)
         log.info("llm_stream_completed latency_ms=%s chars=%s", latency_ms, len(rendered))
 
-        self.cache.set(
-            cache_key,
-            {
-                "estimation": rendered,
-                "model": model_override or self.primary_model,
-                "provider": _provider_from_model(model_override or self.primary_model),
-                "finish_reason": "stop",
-                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-                "latency_ms": latency_ms,
-                "cost_usd": 0.0,
-            },
-        )
+        usage_dict = _usage_dict_from_litellm(stream_usage_raw)
+        if usage_dict is None:
+            usage_dict = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+        model_final = _normalise_model_name(streamed_model or resolved_model)
+        cost = _estimate_cost(model_final, usage_dict["input_tokens"], usage_dict["output_tokens"])
+
+        cache_payload = {
+            "estimation": rendered,
+            "model": model_final,
+            "provider": _provider_from_model(streamed_model or resolved_model),
+            "finish_reason": "stop",
+            "usage": usage_dict,
+            "latency_ms": latency_ms,
+            "cost_usd": cost,
+        }
+        self.cache.set(cache_key, cache_payload)
+
+        if stream_meta is not None:
+            stream_meta.update(
+                {
+                    "cache_hit": False,
+                    "model": model_final,
+                    "provider": cache_payload["provider"],
+                    "usage": usage_dict,
+                    "cost_usd": cost,
+                    "latency_ms": latency_ms,
+                    "finish_reason": "stop",
+                }
+            )
 
     def _build_call_kwargs(
         self,
@@ -246,6 +311,7 @@ class LLMWrapper:
         }
         if stream:
             kwargs["stream"] = True
+            kwargs["stream_options"] = {"include_usage": True}
 
         if thinking_budget is not None:
             target_model = model_override or self.primary_model
@@ -280,12 +346,9 @@ class LLMWrapper:
     def _normalise_response(response: Any, *, latency_ms: int) -> dict[str, Any]:
         choice = response.choices[0]
         finish_reason = (choice.finish_reason or "stop").lower()
-        usage = response.usage
-        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        output_tokens = getattr(usage, "completion_tokens", 0) or 0
-        total_tokens = getattr(usage, "total_tokens", input_tokens + output_tokens) or (
-            input_tokens + output_tokens
-        )
+        usage_norm = _usage_dict_from_litellm(response.usage)
+        if usage_norm is None:
+            usage_norm = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
         model = _normalise_model_name(response.model)
         return {
@@ -293,11 +356,9 @@ class LLMWrapper:
             "model": model,
             "provider": _provider_from_model(model),
             "finish_reason": finish_reason,
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "total_tokens": total_tokens,
-            },
+            "usage": usage_norm,
             "latency_ms": latency_ms,
-            "cost_usd": _estimate_cost(model, input_tokens, output_tokens),
+            "cost_usd": _estimate_cost(
+                model, usage_norm["input_tokens"], usage_norm["output_tokens"]
+            ),
         }

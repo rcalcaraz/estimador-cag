@@ -1,20 +1,23 @@
 # Desarrollo local: monta el código y usa --reload en la API.
-# Para producción, quita los volúmenes y la opción `--reload`.
+# Redis arranca siempre: la caché LLM usa el hostname `redis` en la red de Compose
+# (no `localhost`, que dentro del contenedor apunta al propio contenedor).
 #
-# Solo API: docker compose up --build
-# API + Redis (caché LLM): docker compose --profile redis up --build
-# API + Streamlit: docker compose --profile ui up --build
-# Todo junto: docker compose --profile redis --profile ui up --build
+# Solo API + Redis: docker compose up --build
+# Con Streamlit: docker compose --profile ui up --build
 
 services:
   redis:
     # ECR Public (Amazon) evita pulls por CDN de Docker Hub que pueden fallar TLS en algunas redes.
     image: public.ecr.aws/docker/library/redis:7-alpine
     container_name: lidr-estimator-redis
-    profiles: [redis]
     ports:
       - "6379:6379"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   estimator:
     build: .
@@ -23,6 +26,12 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # Sustituye REDIS_URL del .env (localhost) por el servicio en la red Docker.
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
       - ./app:/app/app
       - ./streamlit_app.py:/app/streamlit_app.py
@@ -43,6 +52,11 @@ services:
       - "8501:8501"
     env_file:
       - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
       - ./app:/app/app
       - ./streamlit_app.py:/app/streamlit_app.py

@@ -59,6 +59,11 @@ def _render_cag_sidebar() -> None:
         st.sidebar.info("Aún no hay una respuesta completada en esta sesión.")
         return
 
+    if outcome.cache_hit:
+        st.sidebar.success("Origen: **caché Redis** (sin nueva llamada al modelo).")
+    else:
+        st.sidebar.info("Origen: **llamada en directo** al modelo.")
+
     st.sidebar.metric("Modelo", outcome.model)
     st.sidebar.caption(f"Proveedor: **{outcome.provider}**")
     c1, c2 = st.sidebar.columns(2)
@@ -66,6 +71,8 @@ def _render_cag_sidebar() -> None:
     c2.metric("Tokens salida", _format_token_value(outcome.output_tokens))
     if outcome.total_tokens is not None:
         st.sidebar.caption(f"Total tokens (reportado): {_format_token_value(outcome.total_tokens)}")
+    if outcome.cost_usd is not None and outcome.cost_usd > 0:
+        st.sidebar.caption(f"Coste estimado (USD): **{outcome.cost_usd:.6f}**")
     if outcome.response_time_seconds is not None:
         t = outcome.response_time_seconds
         st.sidebar.metric(
