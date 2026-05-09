@@ -1,10 +1,12 @@
 from datetime import datetime, timezone
 
+import structlog
 from fastapi import APIRouter, HTTPException
 
 from app.schema.estimations import EstimateRequest, EstimateResponse
 from app.services.llm_service import generate_estimation
 
+log = structlog.get_logger()
 router = APIRouter(tags=["estimaciones"])
 
 
@@ -19,6 +21,7 @@ async def estimate(body: EstimateRequest) -> EstimateResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
+        log.error("estimation_endpoint_error", error=str(e))
         raise HTTPException(
             status_code=502,
             detail=f"Error al llamar al proveedor LLM: {e!s}",

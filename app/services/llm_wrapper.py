@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any, AsyncIterator
 
 import litellm
+import structlog
 from litellm import Router
 
 from app.services.cache import EstimationCache
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 MODEL_COSTS: dict[str, dict[str, float]] = {
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
@@ -154,27 +154,27 @@ class LLMWrapper:
         )
 
         log.info(
-            "llm_call_started model=%s thinking=%s",
-            model_override or self.primary_model,
-            thinking_budget is not None,
+            "llm_call_started",
+            model=model_override or self.primary_model,
+            thinking=thinking_budget is not None,
         )
         t0 = time.perf_counter()
         try:
             response = await self._adispatch(model_override=model_override, **kwargs)
         except Exception:
             latency_ms = int((time.perf_counter() - t0) * 1000)
-            log.exception("llm_call_failed latency_ms=%s", latency_ms)
+            log.exception("llm_call_failed", latency_ms=latency_ms)
             raise
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
         result = self._normalise_response(response, latency_ms=latency_ms)
         log.info(
-            "llm_call_completed model=%s provider=%s in=%s out=%s cost_usd=%s",
-            result["model"],
-            result["provider"],
-            result["usage"]["input_tokens"],
-            result["usage"]["output_tokens"],
-            result["cost_usd"],
+            "llm_call_completed",
+            model=result["model"],
+            provider=result["provider"],
+            input_tokens=result["usage"]["input_tokens"],
+            output_tokens=result["usage"]["output_tokens"],
+            cost_usd=result["cost_usd"],
         )
         self.cache.set(cache_key, result)
         return {**result, "cache_hit": False}
@@ -200,7 +200,7 @@ class LLMWrapper:
         )
         cached = self.cache.get(cache_key)
         if cached:
-            log.info("stream_cache_hit chars=%s", len(cached.get("estimation", "")))
+            log.info("stream_cache_hit", chars=len(cached.get("estimation", "")))
             if stream_meta is not None:
                 usage = cached.get("usage") or {
                     "input_tokens": 0,
@@ -236,7 +236,7 @@ class LLMWrapper:
             stream=True,
         )
 
-        log.info("llm_stream_started model=%s", model_override or self.primary_model)
+        log.info("llm_stream_started", model=model_override or self.primary_model)
         t0 = time.perf_counter()
         full_text: list[str] = []
         stream_usage_raw: Any = None
@@ -256,12 +256,12 @@ class LLMWrapper:
                     yield delta
         except Exception:
             latency_ms = int((time.perf_counter() - t0) * 1000)
-            log.exception("llm_stream_failed latency_ms=%s", latency_ms)
+            log.exception("llm_stream_failed", latency_ms=latency_ms)
             raise
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
         rendered = "".join(full_text)
-        log.info("llm_stream_completed latency_ms=%s chars=%s", latency_ms, len(rendered))
+        log.info("llm_stream_completed", latency_ms=latency_ms, chars=len(rendered))
 
         usage_dict = _usage_dict_from_litellm(stream_usage_raw)
         if usage_dict is None:
@@ -320,9 +320,9 @@ class LLMWrapper:
                 kwargs["max_tokens"] = max(max_tokens, thinking_budget + 1024)
             else:
                 log.warning(
-                    "thinking_budget ignorado para proveedor=%s model=%s",
-                    _provider_from_model(target_model),
-                    target_model,
+                    "thinking_budget_ignored",
+                    provider=_provider_from_model(target_model),
+                    model=target_model,
                 )
         return kwargs
 

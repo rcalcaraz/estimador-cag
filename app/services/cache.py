@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from typing import Any
 
 import redis
+import structlog
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 class EstimationCache:
@@ -49,17 +49,17 @@ class EstimationCache:
         try:
             cached = self.redis.get(key)
         except redis.RedisError as exc:
-            log.warning("cache_get_failed: %s", exc)
+            log.warning("cache_get_failed", error=str(exc))
             return None
         if cached:
-            log.info("cache_hit key_prefix=%s", key[:24])
+            log.info("cache_hit", key_prefix=key[:24])
             return json.loads(cached)
-        log.info("cache_miss key_prefix=%s", key[:24])
+        log.info("cache_miss", key_prefix=key[:24])
         return None
 
     def set(self, key: str, response: dict[str, Any]) -> None:
         try:
             self.redis.setex(key, self.ttl, json.dumps(response))
-            log.info("cache_stored key_prefix=%s ttl=%s", key[:24], self.ttl)
+            log.info("cache_stored", key_prefix=key[:24], ttl=self.ttl)
         except redis.RedisError as exc:
-            log.warning("cache_set_failed: %s", exc)
+            log.warning("cache_set_failed", error=str(exc))

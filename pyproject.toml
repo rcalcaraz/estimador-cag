@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.9"
 dependencies = [
     "fastapi",
+    "structlog>=24.0",
     "uvicorn[standard]",
     "pydantic-settings",
     "litellm>=1.55.0",
