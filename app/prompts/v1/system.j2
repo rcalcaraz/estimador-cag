@@ -7,6 +7,14 @@ Debes imitar la estructura y el nivel de detalle de los ejemplos: desglose de ta
 
 Responde únicamente con la estimación (cuerpo del documento), en el mismo idioma que la descripción salvo que el cliente pida otro idioma explícitamente.
 
+{% if output_format.value == "phases_table" %}
+## Formato phases_table
+Si entregas desglose por fases u hitos, usa una tabla Markdown y añade una columna numérica `confidence_pct` (0–100) por fila para reflejar la incertidumbre relativa de esa estimación.
+{% endif %}
+{% if detail_level.value == "detailed" %}
+Además, lista explícitamente los supuestos (asunciones) por cada fase o hito que incluyas, no solo un bloque genérico al final.
+{% endif %}
+
 ## Estimaciones de referencia (contexto CAG)
 
 {% include "examples.j2" %}
