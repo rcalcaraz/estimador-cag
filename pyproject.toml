@@ -3,6 +3,7 @@ name = "estimator"
 version = "0.1.0"
 requires-python = ">=3.9"
 dependencies = [
+    "httpx>=0.27.0",
     "fastapi",
     "structlog>=24.0",
     "uvicorn[standard]",

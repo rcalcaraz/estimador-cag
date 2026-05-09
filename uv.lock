@@ -530,6 +530,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "fastapi", version = "0.128.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "fastapi", version = "0.136.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "httpx" },
     { name = "litellm", version = "1.83.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "litellm", version = "1.83.14", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "openai", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -551,6 +552,7 @@ dependencies = [
 requires-dist = [
     { name = "anthropic" },
     { name = "fastapi" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "litellm", specifier = ">=1.55.0" },
     { name = "openai" },
     { name = "pydantic-settings" },

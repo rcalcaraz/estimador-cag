@@ -1,6 +1,6 @@
 # estimator
 
-Servicio que convierte la **transcripción de una reunión** en una **estimación de software** usando un modelo de lenguaje.
+Servicio que recibe una **descripción de alcance** tipada (tipo de proyecto, nivel de detalle y formato de salida) y devuelve una **estimación de software** en texto libre, usando un modelo de lenguaje.
 
 Los ejemplos de referencia van incluidos en la petición al modelo (patrón **CAG**: contexto en la misma llamada, sin base vectorial).
 
@@ -8,7 +8,7 @@ Las llamadas al modelo pasan por un **wrapper LiteLLM** (`app/services/llm_wrapp
 
 La forma prevista de ejecutar el proyecto es **con Docker**: misma versión de Python y dependencias para todo el mundo, sin instalar `uv` ni un virtualenv en la máquina host.
 
-Opcionalmente hay una **interfaz de chat** con Streamlit (perfil `ui` en Compose): mismos ajustes que la API, respuesta en streaming y panel lateral con el contexto enviado al modelo, métricas de tokens y tiempo, indicación de si la respuesta vino de **caché Redis** y coste estimado cuando aplica.
+Opcionalmente hay una **interfaz con formulario** en Streamlit (perfil `ui` en Compose): construye un `EstimationRequest`, hace **streaming** con `POST .../estimate/stream` (NDJSON) y el panel lateral muestra **transparencia CAG** (system prompt y ejemplos en solo lectura), **tokens**, modelo, **caché** y tiempo de respuesta. La URL base de la API se configura con **`ESTIMATOR_API_BASE_URL`** (en Compose apunta al servicio `estimator` en la red Docker).
 
 **Redis** arranca **siempre** con Compose: la API y Streamlit usan **`REDIS_URL=redis://redis:6379`** en la red Docker (el `docker-compose.yml` lo inyecta y no hace falta cambiar el `.env` para eso). Sin Redis en marcha la caché falla y verás `cache_get_failed` en los logs.
 
@@ -46,6 +46,8 @@ Los comandos de este README se ejecutan desde la carpeta **`estimator/`**, donde
    docker compose --profile ui up --build
    ```
 
+   Con el perfil `ui`, Compose fija **`ESTIMATOR_API_BASE_URL=http://estimator:8000`** en el servicio Streamlit para que las peticiones vayan al contenedor de la API en la red interna.
+
 4. Documentación interactiva de la API: [http://localhost:8000/docs](http://localhost:8000/docs)  
    Streamlit (si usaste el perfil `ui`): [http://localhost:8501](http://localhost:8501)
 
@@ -79,6 +81,7 @@ Copia `.env.example` a `.env`. No subas `.env` al repositorio (está ignorado po
 | `LLM_RETRIES` | Reintentos que delega LiteLLM. |
 | `REDIS_URL` | URL de Redis (`redis://localhost:6379` en el host; con Docker Compose el `docker-compose.yml` fuerza `redis://redis:6379`). |
 | `CACHE_TTL` | Segundos de vida de cada entrada en caché. |
+| `ESTIMATOR_API_BASE_URL` | URL base de la API FastAPI para el cliente Streamlit (por defecto `http://127.0.0.1:8000`; con Docker Compose y perfil `ui` suele ser `http://estimator:8000`). |
 | `APP_ENV` | Entorno de ejecución. |
 | `LOG_LEVEL` | Nivel de log, p. ej. `DEBUG`. |
 
@@ -88,18 +91,31 @@ Compose inyecta el mismo `.env` que usa la aplicación vía `env_file`.
 
 ## API
 
+El contrato está definido en Pydantic v2 en `app/schemas.py`:
+
+- **`EstimationRequest`**: `description` (20–2000 caracteres), `project_type`, `detail_level`, `output_format` (enums con valores en snake_case, p. ej. `mobile_app`, `summary`, `phases_table`).
+- **`EstimationResponse`**: `text`, `prompt_version`, `model`, `provider` (`openai` \| `anthropic`), `cache_hit`, tokens (`input_tokens`, `output_tokens`, `total_tokens`), `response_time_seconds`, `cost_usd` (opcionales salvo los campos obligatorios del modelo).
+
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | `GET` | `/health` | Comprueba que el servicio responde |
-| `POST` | `/api/v1/estimate` | Envías JSON con `transcription`; devuelve la estimación y metadatos |
+| `POST` | `/api/v1/estimate` | Cuerpo JSON `EstimationRequest`; respuesta JSON única `EstimationResponse` |
+| `POST` | `/api/v1/estimate/stream` | Mismo cuerpo; respuesta **NDJSON**: líneas `{"type":"delta","text":"..."}` y una línea final `{"type":"final", ...}` con el mismo esquema que `EstimationResponse` |
 
 Ejemplo (API ya levantada):
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:8000/api/v1/estimate" \
   -H "Content-Type: application/json" \
-  -d '{"transcription": "El cliente describe el alcance del proyecto..."}'
+  -d '{
+    "description": "El cliente necesita un panel web para gestionar pedidos, con login y notificaciones por email. Integración con su ERP vía API REST.",
+    "project_type": "web_saas",
+    "detail_level": "medium",
+    "output_format": "phases_table"
+  }'
 ```
+
+En [http://localhost:8000/docs](http://localhost:8000/docs) verás el esquema OpenAPI generado a partir de los mismos modelos.
 
 ---
 
@@ -123,7 +139,8 @@ uv sync
 cp .env.example .env   # si aún no existe
 # API
 uv run uvicorn app.main:app --reload
-# Streamlit (otra terminal)
+# Streamlit (otra terminal; misma máquina que la API)
+export ESTIMATOR_API_BASE_URL=http://127.0.0.1:8000
 uv run streamlit run streamlit_app.py
 ```
 
@@ -136,10 +153,11 @@ Si cambias `pyproject.toml`, vuelve a ejecutar `uv sync`.
 ```text
 estimator/
 ├── Dockerfile / docker-compose.yml
-├── streamlit_app.py          # Interfaz web
+├── streamlit_app.py          # Formulario web → POST /api/v1/estimate
 └── app/
     ├── main.py               # FastAPI y rutas base
     ├── config.py             # Ajustes desde .env
+    ├── schemas.py            # Contrato API (Pydantic): request/response y enums
     ├── dependencies.py       # Singletons: caché y wrapper LLM
     ├── routers/estimations.py
     ├── services/

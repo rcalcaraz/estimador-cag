@@ -54,8 +54,11 @@ services:
       - .env
     environment:
       REDIS_URL: redis://redis:6379
+      ESTIMATOR_API_BASE_URL: http://estimator:8000
     depends_on:
       redis:
+        condition: service_healthy
+      estimator:
         condition: service_healthy
     volumes:
       - ./app:/app/app

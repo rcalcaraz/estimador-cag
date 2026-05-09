@@ -10,11 +10,14 @@ import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, List, Literal, Optional
 
-from app.config import Settings, get_settings
-from app.dependencies import get_llm_wrapper
 from app.context.examples import ESTIMATION_EXAMPLES
+from app.dependencies import get_llm_wrapper
+from app.schemas import DetailLevel, EstimationRequest, OutputFormat, ProjectType
 
 DEFAULT_MAX_TOKENS = 8192
+
+# Versión del prompt CAG + plantilla de usuario (expuesta en la API).
+ESTIMATION_PROMPT_VERSION = "cag-estimation-form-v1"
 
 _SYSTEM_ROLE = """Eres un estimador de software experto. Tu tarea es producir estimaciones de esfuerzo, coste y planificación basándote en:
 
@@ -69,6 +72,42 @@ def build_system_prompt() -> str:
     )
 
 
+_PROJECT_TYPE_LABEL: dict[ProjectType, str] = {
+    ProjectType.MOBILE_APP: "aplicación móvil",
+    ProjectType.WEB_SAAS: "SaaS / producto web",
+    ProjectType.INTERNAL_TOOL: "herramienta interna",
+    ProjectType.DATA_PIPELINE: "pipeline de datos / ETL",
+}
+
+_DETAIL_LEVEL_HINT: dict[DetailLevel, str] = {
+    DetailLevel.SUMMARY: "Respuesta breve: visionado general, totales aproximados y riesgos clave.",
+    DetailLevel.MEDIUM: "Equilibrio entre síntesis y desglose: fases o áreas con orden de magnitud.",
+    DetailLevel.DETAILED: "Muy detallado: desglose fino, supuestos explícitos, riesgos y dependencias.",
+}
+
+_OUTPUT_FORMAT_HINT: dict[OutputFormat, str] = {
+    OutputFormat.PHASES_TABLE: "Prioriza una tabla por fases (o hitos) con esfuerzo y notas.",
+    OutputFormat.LINE_ITEMS: "Prioriza lista de partidas / ítems numerados con estimación por ítem.",
+    OutputFormat.NARRATIVE: "Prioriza narrativa continua (párrafos) manteniendo cifras donde aplique.",
+}
+
+
+def build_estimation_user_message(req: EstimationRequest) -> str:
+    """Construye el mensaje de usuario a partir del contrato :class:`EstimationRequest`."""
+    desc = req.description.strip()
+    pt = _PROJECT_TYPE_LABEL[req.project_type]
+    dl = _DETAIL_LEVEL_HINT[req.detail_level]
+    fmt = _OUTPUT_FORMAT_HINT[req.output_format]
+    return (
+        "## Parámetros del encargo\n"
+        f"- **Tipo de proyecto:** {pt} (`{req.project_type.value}`)\n"
+        f"- **Nivel de detalle:** {dl}\n"
+        f"- **Formato de salida deseado:** {fmt}\n\n"
+        "## Descripción del alcance / contexto\n"
+        f"{desc}"
+    )
+
+
 def _coerce_provider(raw: str, model: str) -> Literal["openai", "anthropic"]:
     if raw in ("openai", "anthropic"):
         return raw  # type: ignore[return-value]
@@ -93,10 +132,9 @@ def _wrapper_result_to_outcome(result: dict, *, elapsed_s: float) -> EstimationO
     )
 
 
-async def stream_estimation_text(
-    meeting_transcript: str,
+async def stream_estimation(
+    body: EstimationRequest,
     *,
-    cfg: Settings | None = None,
     outcome_holder: List[EstimationOutcome],
 ) -> AsyncIterator[str]:
     """
@@ -105,11 +143,8 @@ async def stream_estimation_text(
     Tras consumir el iterador, el resultado completo y metadatos quedan en *outcome_holder*
     (tokens, caché, coste y modelo efectivo según el wrapper LiteLLM).
     """
-    text = (meeting_transcript or "").strip()
-    if not text:
-        raise ValueError("La transcripción de la reunión no puede estar vacía")
+    user_message = build_estimation_user_message(body)
 
-    settings = cfg or get_settings()
     system_prompt = build_system_prompt()
     wrapper = get_llm_wrapper()
 
@@ -119,7 +154,7 @@ async def stream_estimation_text(
 
     async for piece in wrapper.acomplete_stream(
         system_prompt=system_prompt,
-        user_message=text,
+        user_message=user_message,
         model_override=None,
         max_tokens=DEFAULT_MAX_TOKENS,
         temperature=0.3,
@@ -143,28 +178,23 @@ async def stream_estimation_text(
 
 
 async def generate_estimation(
-    meeting_transcript: str,
-    *,
-    cfg: Settings | None = None,
+    body: EstimationRequest,
 ) -> EstimationOutcome:
     """
-    Envía [system] = rol + ejemplos, [user] = transcripción; devuelve la estimación y metadatos.
+    Envía [system] = rol + ejemplos CAG, [user] = descripción tipada (:class:`EstimationRequest`).
 
     El router LiteLLM usa ``PRIMARY_MODEL`` (OpenAI) y ``FALLBACK_MODEL`` (Anthropic);
     el orden depende de ``LLM_PROVIDER``. Se requiere al menos una API key (fallback opcional).
     """
-    text = (meeting_transcript or "").strip()
-    if not text:
-        raise ValueError("La transcripción de la reunión no puede estar vacía")
+    user_message = build_estimation_user_message(body)
 
-    settings = cfg or get_settings()
     system_prompt = build_system_prompt()
     wrapper = get_llm_wrapper()
 
     t0 = time.perf_counter()
     result = await wrapper.acomplete(
         system_prompt=system_prompt,
-        user_message=text,
+        user_message=user_message,
         model_override=None,
         max_tokens=DEFAULT_MAX_TOKENS,
         thinking_budget=None,
@@ -174,9 +204,9 @@ async def generate_estimation(
     latency_ms = result.get("latency_ms")
     elapsed_s = (latency_ms / 1000.0) if isinstance(latency_ms, int) else wall_s
 
-    body = (result.get("estimation") or "").strip()
-    if not body:
+    rendered = (result.get("estimation") or "").strip()
+    if not rendered:
         raise RuntimeError("El proveedor devolvió contenido vacío")
 
-    outcome = _wrapper_result_to_outcome({**result, "estimation": body}, elapsed_s=elapsed_s)
+    outcome = _wrapper_result_to_outcome({**result, "estimation": rendered}, elapsed_s=elapsed_s)
     return outcome

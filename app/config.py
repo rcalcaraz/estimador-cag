@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     )
     cache_ttl: int = Field(default=86400, description="TTL de la caché (segundos).")
 
+    estimator_api_base_url: str = Field(
+        default="http://127.0.0.1:8000",
+        description="URL base de la API FastAPI (cliente Streamlit vía HTTP).",
+    )
+
     app_env: str = Field(
         default="development",
         description="Entorno de ejecución.",

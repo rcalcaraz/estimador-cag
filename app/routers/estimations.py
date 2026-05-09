@@ -1,23 +1,44 @@
-from datetime import datetime, timezone
+import json
 
 import structlog
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
-from app.schema.estimations import EstimateRequest, EstimateResponse
-from app.services.llm_service import generate_estimation
+from app.schemas import EstimationRequest, EstimationResponse
+from app.services.llm_service import (
+    ESTIMATION_PROMPT_VERSION,
+    EstimationOutcome,
+    generate_estimation,
+    stream_estimation,
+)
 
 log = structlog.get_logger()
 router = APIRouter(tags=["estimaciones"])
 
 
-@router.post("/estimate", response_model=EstimateResponse)
-async def estimate(body: EstimateRequest) -> EstimateResponse:
+def _estimation_response_from_outcome(outcome: EstimationOutcome) -> EstimationResponse:
+    return EstimationResponse(
+        text=outcome.estimation,
+        prompt_version=ESTIMATION_PROMPT_VERSION,
+        model=outcome.model,
+        provider=outcome.provider,
+        cache_hit=outcome.cache_hit,
+        input_tokens=outcome.input_tokens,
+        output_tokens=outcome.output_tokens,
+        total_tokens=outcome.total_tokens,
+        response_time_seconds=outcome.response_time_seconds,
+        cost_usd=outcome.cost_usd,
+    )
+
+
+@router.post("/estimate", response_model=EstimationResponse)
+async def estimate(body: EstimationRequest) -> EstimationResponse:
     """
-    Genera una estimación de software a partir de la transcripción, usando el contexto CAG
-    (ejemplos históricos en el system prompt).
+    Genera una estimación de software a partir del cuerpo tipado (:class:`EstimationRequest`),
+    usando contexto CAG (ejemplos históricos en el system prompt).
     """
     try:
-        outcome = await generate_estimation(body.transcription)
+        outcome = await generate_estimation(body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -27,12 +48,38 @@ async def estimate(body: EstimateRequest) -> EstimateResponse:
             detail=f"Error al llamar al proveedor LLM: {e!s}",
         ) from e
 
-    return EstimateResponse(
-        estimation=outcome.estimation,
-        model=outcome.model,
-        provider=outcome.provider,
-        generated_at=datetime.now(timezone.utc),
-        input_tokens=outcome.input_tokens,
-        output_tokens=outcome.output_tokens,
-        total_tokens=outcome.total_tokens,
-    )
+    return _estimation_response_from_outcome(outcome)
+
+
+@router.post("/estimate/stream")
+async def estimate_stream(body: EstimationRequest) -> StreamingResponse:
+    """
+    Igual que ``POST /estimate`` pero devuelve NDJSON: líneas ``{"type":"delta","text":"..."}``
+    y una última línea ``{"type":"final", ...}`` con el mismo cuerpo que :class:`EstimationResponse`.
+    """
+
+    async def ndjson_bytes():
+        try:
+            outcome_holder: list[EstimationOutcome] = []
+            async for piece in stream_estimation(body, outcome_holder=outcome_holder):
+                line = json.dumps({"type": "delta", "text": piece}, ensure_ascii=False) + "\n"
+                yield line.encode("utf-8")
+            if not outcome_holder:
+                raise RuntimeError("No se obtuvo resultado del stream")
+            resp = _estimation_response_from_outcome(outcome_holder[0])
+            final_payload = resp.model_dump(mode="json")
+            final_payload["type"] = "final"
+            yield (json.dumps(final_payload, ensure_ascii=False) + "\n").encode("utf-8")
+        except ValueError as e:
+            err = {"type": "error", "code": 400, "detail": str(e)}
+            yield (json.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+        except Exception as e:
+            log.error("estimation_stream_error", error=str(e))
+            err = {
+                "type": "error",
+                "code": 502,
+                "detail": f"Error al llamar al proveedor LLM: {e!s}",
+            }
+            yield (json.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
+
+    return StreamingResponse(ndjson_bytes(), media_type="application/x-ndjson")
