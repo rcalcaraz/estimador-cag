@@ -7,25 +7,13 @@ Además incluye una **interfaz de chat con Streamlit** (`streamlit_app.py`) que 
 ## Requisitos
 
 - Python 3.9 o superior (`requires-python` en `pyproject.toml`)
-- Opcional: [uv](https://docs.astral.sh/uv/) para instalar dependencias y ejecutar el servidor
+- [uv](https://docs.astral.sh/uv/) para instalar dependencias y ejecutar comandos del proyecto
 
 ## Instalación
-
-Con **uv** (recomendado):
 
 ```bash
 cd estimador-cag
 uv sync
-```
-
-Con **pip** y un venv clásico:
-
-```bash
-cd estimador-cag
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install --upgrade pip setuptools wheel
-pip install .
 ```
 
 ## Variables de entorno
@@ -48,12 +36,6 @@ La carga real la hace **`app/config.py`** con Pydantic `BaseSettings` y `env_fil
 ```bash
 cd estimador-cag
 uv run uvicorn app.main:app --reload
-```
-
-Equivalente con venv activado:
-
-```bash
-uvicorn app.main:app --reload
 ```
 
 - Documentación interactiva: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) (Swagger UI)
@@ -82,12 +64,6 @@ Ejecuta **desde la raíz del proyecto** `estimador-cag/` (igual que la API, para
 ```bash
 cd estimador-cag
 uv run streamlit run streamlit_app.py
-```
-
-Con venv activado:
-
-```bash
-streamlit run streamlit_app.py
 ```
 
 Por defecto Streamlit suele abrir en [http://localhost:8501](http://localhost:8501). Si el puerto está ocupado:
@@ -134,4 +110,4 @@ app/
 - **openai**, **anthropic** — clientes LLM
 - **python-dotenv** — lectura de `.env` (coherente con el uso típico en local)
 
-Tras cambiar `pyproject.toml`, vuelve a instalar (`uv sync` o `pip install .`).
+Tras cambiar `pyproject.toml`, vuelve a ejecutar `uv sync`.
