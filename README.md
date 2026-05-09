@@ -1,4 +1,4 @@
-# estimador-cag
+# estimator
 
 API **FastAPI** que genera **estimaciones de software** a partir de la transcripción de una reunión. El modelo recibe en el mensaje *system* el rol de estimador y **ejemplos históricos** definidos en `app/context/examples.py` (arquitectura tipo **CAG**: el contexto viaja en la propia llamada al LLM). El proveedor (**OpenAI** o **Anthropic**) se elige con `LLM_PROVIDER` en `.env`.
 
@@ -12,7 +12,7 @@ Además incluye una **interfaz de chat con Streamlit** (`streamlit_app.py`) que 
 ## Instalación
 
 ```bash
-cd estimador-cag
+cd estimator
 uv sync
 ```
 
@@ -29,12 +29,12 @@ Copia `.env.example` a `.env` y rellena los valores. El archivo **`.env` está e
 | `APP_ENV` | Entorno de ejecución | `development` |
 | `LOG_LEVEL` | Nivel de logging | `DEBUG` |
 
-La carga real la hace **`app/config.py`** con Pydantic `BaseSettings` y `env_file=".env"`. Ejecuta siempre el servidor **desde la raíz del proyecto** (`estimador-cag/`) para que se encuentre el `.env`.
+La carga real la hace **`app/config.py`** con Pydantic `BaseSettings` y `env_file=".env"`. Ejecuta siempre el servidor **desde la raíz del proyecto** (`estimator/`) para que se encuentre el `.env`.
 
 ## Arranque en desarrollo
 
 ```bash
-cd estimador-cag
+cd estimator
 uv run uvicorn app.main:app --reload
 ```
 
@@ -59,10 +59,10 @@ uv run uvicorn app.main:app --reload --port 8001
 
 Chat para pegar o escribir la transcripción y ver la estimación con **streaming**. La barra lateral muestra el *system prompt* completo, el bloque de ejemplos CAG y, tras cada respuesta completada, modelo, proveedor, tokens de entrada/salida y tiempo de respuesta.
 
-Ejecuta **desde la raíz del proyecto** `estimador-cag/` (igual que la API, para que se cargue `.env`):
+Ejecuta **desde la raíz del proyecto** `estimator/` (igual que la API, para que se cargue `.env`):
 
 ```bash
-cd estimador-cag
+cd estimator
 uv run streamlit run streamlit_app.py
 ```
 
