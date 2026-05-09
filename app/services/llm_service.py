@@ -1,4 +1,8 @@
-"""Llamadas al LLM para generar estimaciones (CAG: contexto en el system prompt)."""
+"""Llamadas al LLM para generar estimaciones (CAG: contexto en el system prompt).
+
+Las llamadas pasan por :mod:`app.services.llm_wrapper` (LiteLLM + fallback + caché Redis),
+igual que en ai-engineering.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +10,11 @@ import time
 from dataclasses import dataclass
 from typing import AsyncIterator, List, Literal, Optional
 
-from anthropic import AsyncAnthropic
-from openai import AsyncOpenAI
-
 from app.config import Settings, get_settings
+from app.dependencies import get_llm_wrapper
 from app.context.examples import ESTIMATION_EXAMPLES
 
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
-DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5"
+DEFAULT_MAX_TOKENS = 8192
 
 _SYSTEM_ROLE = """Eres un estimador de software experto. Tu tarea es producir estimaciones de esfuerzo, coste y planificación basándote en:
 
@@ -36,6 +37,8 @@ class EstimationOutcome:
     output_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
     response_time_seconds: Optional[float] = None
+    cost_usd: Optional[float] = None
+    cache_hit: bool = False
 
 
 def get_system_role_prompt() -> str:
@@ -66,190 +69,27 @@ def build_system_prompt() -> str:
     )
 
 
-def _resolve_model(cfg: Settings) -> str:
-    if cfg.llm_provider == "anthropic":
-        m = (cfg.llm_model or "").strip()
-        if not m or m.startswith("gpt"):
-            return DEFAULT_ANTHROPIC_MODEL
-        return m
-    return (cfg.llm_model or "").strip() or DEFAULT_OPENAI_MODEL
+def _coerce_provider(raw: str, model: str) -> Literal["openai", "anthropic"]:
+    if raw in ("openai", "anthropic"):
+        return raw  # type: ignore[return-value]
+    m = model.lower()
+    if "claude" in m:
+        return "anthropic"
+    return "openai"
 
 
-def _require_api_key(cfg: Settings) -> None:
-    if cfg.llm_provider == "openai":
-        if not (cfg.openai_api_key and cfg.openai_api_key.strip()):
-            raise ValueError("Falta OPENAI_API_KEY para LLM_PROVIDER=openai")
-    else:
-        if not (cfg.anthropic_api_key and cfg.anthropic_api_key.strip()):
-            raise ValueError("Falta ANTHROPIC_API_KEY para LLM_PROVIDER=anthropic")
-
-
-def _anthropic_text_content(message: object) -> str:
-    parts: List[str] = []
-    for block in getattr(message, "content", []) or []:
-        btype = getattr(block, "type", None)
-        if btype == "text":
-            parts.append(getattr(block, "text", "") or "")
-    return "".join(parts).strip()
-
-
-async def _call_openai(cfg: Settings, system_prompt: str, user_transcript: str) -> EstimationOutcome:
-    client = AsyncOpenAI(api_key=cfg.openai_api_key)
-    model = _resolve_model(cfg)
-    t0 = time.perf_counter()
-    completion = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_transcript},
-        ],
-        temperature=0.3,
-    )
-    choice = completion.choices[0].message
-    text = (choice.content or "").strip()
-    if not text:
-        raise RuntimeError("OpenAI devolvió contenido vacío")
-    usage = getattr(completion, "usage", None)
-    prompt_t = getattr(usage, "prompt_tokens", None) if usage else None
-    completion_t = getattr(usage, "completion_tokens", None) if usage else None
-    total_t = getattr(usage, "total_tokens", None) if usage else None
-    elapsed = time.perf_counter() - t0
+def _wrapper_result_to_outcome(result: dict, *, elapsed_s: float) -> EstimationOutcome:
+    usage = result.get("usage") or {}
     return EstimationOutcome(
-        estimation=text,
-        model=model,
-        provider="openai",
-        input_tokens=prompt_t,
-        output_tokens=completion_t,
-        total_tokens=total_t,
-        response_time_seconds=elapsed,
-    )
-
-
-async def _stream_openai(
-    cfg: Settings, system_prompt: str, user_transcript: str, outcome_holder: List[EstimationOutcome]
-) -> AsyncIterator[str]:
-    """Emite fragmentos de texto y deja el resultado final en *outcome_holder* (un solo elemento)."""
-    client = AsyncOpenAI(api_key=cfg.openai_api_key)
-    model = _resolve_model(cfg)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_transcript},
-    ]
-    kwargs = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.3,
-        "stream": True,
-    }
-    t0 = time.perf_counter()
-    try:
-        stream = await client.chat.completions.create(**kwargs, stream_options={"include_usage": True})
-    except TypeError:
-        stream = await client.chat.completions.create(**kwargs)
-
-    parts: List[str] = []
-    prompt_t: Optional[int] = None
-    completion_t: Optional[int] = None
-    total_t: Optional[int] = None
-
-    async for chunk in stream:
-        choices = chunk.choices or []
-        if choices:
-            delta = choices[0].delta
-            piece = (delta.content or "") if delta and delta.content is not None else ""
-            if piece:
-                parts.append(piece)
-                yield piece
-        usage = getattr(chunk, "usage", None)
-        if usage is not None:
-            prompt_t = getattr(usage, "prompt_tokens", None)
-            completion_t = getattr(usage, "completion_tokens", None)
-            total_t = getattr(usage, "total_tokens", None)
-
-    text = "".join(parts).strip()
-    if not text:
-        raise RuntimeError("OpenAI devolvió contenido vacío")
-    elapsed = time.perf_counter() - t0
-    outcome_holder.clear()
-    outcome_holder.append(
-        EstimationOutcome(
-            estimation=text,
-            model=model,
-            provider="openai",
-            input_tokens=prompt_t,
-            output_tokens=completion_t,
-            total_tokens=total_t,
-            response_time_seconds=elapsed,
-        )
-    )
-
-
-async def _call_anthropic(cfg: Settings, system_prompt: str, user_transcript: str) -> EstimationOutcome:
-    client = AsyncAnthropic(api_key=cfg.anthropic_api_key)
-    model = _resolve_model(cfg)
-    t0 = time.perf_counter()
-    message = await client.messages.create(
-        model=model,
-        max_tokens=8192,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_transcript}],
-        temperature=0.3,
-    )
-    text = _anthropic_text_content(message)
-    if not text:
-        raise RuntimeError("Anthropic devolvió contenido vacío")
-    usage = getattr(message, "usage", None)
-    in_t = getattr(usage, "input_tokens", None) if usage else None
-    out_t = getattr(usage, "output_tokens", None) if usage else None
-    total = (in_t + out_t) if in_t is not None and out_t is not None else None
-    elapsed = time.perf_counter() - t0
-    return EstimationOutcome(
-        estimation=text,
-        model=model,
-        provider="anthropic",
-        input_tokens=in_t,
-        output_tokens=out_t,
-        total_tokens=total,
-        response_time_seconds=elapsed,
-    )
-
-
-async def _stream_anthropic(
-    cfg: Settings, system_prompt: str, user_transcript: str, outcome_holder: List[EstimationOutcome]
-) -> AsyncIterator[str]:
-    client = AsyncAnthropic(api_key=cfg.anthropic_api_key)
-    model = _resolve_model(cfg)
-    t0 = time.perf_counter()
-    async with client.messages.stream(
-        model=model,
-        max_tokens=8192,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_transcript}],
-        temperature=0.3,
-    ) as stream:
-        async for text in stream.text_stream:
-            yield text
-        message = await stream.get_final_message()
-
-    elapsed = time.perf_counter() - t0
-    text = _anthropic_text_content(message)
-    if not text:
-        raise RuntimeError("Anthropic devolvió contenido vacío")
-    usage = getattr(message, "usage", None)
-    in_t = getattr(usage, "input_tokens", None) if usage else None
-    out_t = getattr(usage, "output_tokens", None) if usage else None
-    total = (in_t + out_t) if in_t is not None and out_t is not None else None
-    outcome_holder.clear()
-    outcome_holder.append(
-        EstimationOutcome(
-            estimation=text,
-            model=model,
-            provider="anthropic",
-            input_tokens=in_t,
-            output_tokens=out_t,
-            total_tokens=total,
-            response_time_seconds=elapsed,
-        )
+        estimation=(result.get("estimation") or "").strip(),
+        model=result.get("model") or "",
+        provider=_coerce_provider(result.get("provider") or "", result.get("model") or ""),
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        total_tokens=usage.get("total_tokens"),
+        response_time_seconds=elapsed_s,
+        cost_usd=result.get("cost_usd"),
+        cache_hit=bool(result.get("cache_hit")),
     )
 
 
@@ -262,23 +102,49 @@ async def stream_estimation_text(
     """
     Igual que `generate_estimation`, pero emite la estimación por fragmentos (streaming).
 
-    Tras consumir el iterador, el resultado completo y metadatos quedan en *outcome_holder*
-    (se reemplaza por un único elemento).
+    Tras consumir el iterador, el resultado completo y metadatos quedan en *outcome_holder*.
+    Los tokens pueden ser ``None`` si el proveedor no los reporta en modo streaming.
     """
     text = (meeting_transcript or "").strip()
     if not text:
         raise ValueError("La transcripción de la reunión no puede estar vacía")
 
     settings = cfg or get_settings()
-    _require_api_key(settings)
     system_prompt = build_system_prompt()
+    wrapper = get_llm_wrapper()
 
-    if settings.llm_provider == "openai":
-        async for piece in _stream_openai(settings, system_prompt, text, outcome_holder):
-            yield piece
-    else:
-        async for piece in _stream_anthropic(settings, system_prompt, text, outcome_holder):
-            yield piece
+    t0 = time.perf_counter()
+    parts: List[str] = []
+
+    async for piece in wrapper.acomplete_stream(
+        system_prompt=system_prompt,
+        user_message=text,
+        model_override=None,
+        max_tokens=DEFAULT_MAX_TOKENS,
+        temperature=0.3,
+    ):
+        parts.append(piece)
+        yield piece
+
+    elapsed = time.perf_counter() - t0
+    rendered = "".join(parts).strip()
+    if not rendered:
+        raise RuntimeError("El proveedor devolvió contenido vacío")
+
+    outcome_holder.clear()
+    outcome_holder.append(
+        EstimationOutcome(
+            estimation=rendered,
+            model=settings.primary_model,
+            provider="anthropic" if settings.llm_provider == "anthropic" else "openai",
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+            response_time_seconds=elapsed,
+            cost_usd=None,
+            cache_hit=False,
+        )
+    )
 
 
 async def generate_estimation(
@@ -289,17 +155,33 @@ async def generate_estimation(
     """
     Envía [system] = rol + ejemplos, [user] = transcripción; devuelve la estimación y metadatos.
 
-    El proveedor y el modelo se toman de la configuración (`LLM_PROVIDER`, `LLM_MODEL`), con modelos
-    económicos por defecto: gpt-4o-mini (OpenAI) y claude-haiku-4-5 (Anthropic).
+    El router LiteLLM usa ``PRIMARY_MODEL`` (OpenAI) y ``FALLBACK_MODEL`` (Anthropic);
+    el orden depende de ``LLM_PROVIDER``. Se requiere al menos una API key (fallback opcional).
     """
     text = (meeting_transcript or "").strip()
     if not text:
         raise ValueError("La transcripción de la reunión no puede estar vacía")
 
     settings = cfg or get_settings()
-    _require_api_key(settings)
     system_prompt = build_system_prompt()
+    wrapper = get_llm_wrapper()
 
-    if settings.llm_provider == "openai":
-        return await _call_openai(settings, system_prompt, text)
-    return await _call_anthropic(settings, system_prompt, text)
+    t0 = time.perf_counter()
+    result = await wrapper.acomplete(
+        system_prompt=system_prompt,
+        user_message=text,
+        model_override=None,
+        max_tokens=DEFAULT_MAX_TOKENS,
+        thinking_budget=None,
+        temperature=0.3,
+    )
+    wall_s = time.perf_counter() - t0
+    latency_ms = result.get("latency_ms")
+    elapsed_s = (latency_ms / 1000.0) if isinstance(latency_ms, int) else wall_s
+
+    body = (result.get("estimation") or "").strip()
+    if not body:
+        raise RuntimeError("El proveedor devolvió contenido vacío")
+
+    outcome = _wrapper_result_to_outcome({**result, "estimation": body}, elapsed_s=elapsed_s)
+    return outcome

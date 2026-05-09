@@ -1,10 +1,21 @@
 # Desarrollo local: monta el código y usa --reload en la API.
-# Para producción, quita los volúmenes y la opción --reload.
+# Para producción, quita los volúmenes y la opción `--reload`.
 #
 # Solo API: docker compose up --build
-# API + interfaz Streamlit: docker compose --profile ui up --build
+# API + Redis (caché LLM): docker compose --profile redis up --build
+# API + Streamlit: docker compose --profile ui up --build
+# Todo junto: docker compose --profile redis --profile ui up --build
 
 services:
+  redis:
+    # ECR Public (Amazon) evita pulls por CDN de Docker Hub que pueden fallar TLS en algunas redes.
+    image: public.ecr.aws/docker/library/redis:7-alpine
+    container_name: lidr-estimator-redis
+    profiles: [redis]
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
   estimator:
     build: .
     container_name: lidr-estimator
