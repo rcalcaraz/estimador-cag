@@ -4,11 +4,12 @@ import structlog
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.prompts.loader import render_estimation_prompt
 from app.schemas import EstimationRequest, EstimationResponse
 from app.services.llm_service import (
     ESTIMATION_PROMPT_VERSION,
     EstimationOutcome,
-    generate_estimation,
+    complete_estimation,
     stream_estimation,
 )
 
@@ -35,10 +36,11 @@ def _estimation_response_from_outcome(outcome: EstimationOutcome) -> EstimationR
 async def estimate(body: EstimationRequest) -> EstimationResponse:
     """
     Genera una estimación de software a partir del cuerpo tipado (:class:`EstimationRequest`),
-    usando contexto CAG (ejemplos históricos en el system prompt).
+    usando plantillas Jinja (system + user) y contexto CAG en el system prompt.
     """
+    system_prompt, user_message = render_estimation_prompt(body)
     try:
-        outcome = await generate_estimation(body)
+        outcome = await complete_estimation(system_prompt, user_message)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:

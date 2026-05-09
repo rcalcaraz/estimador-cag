@@ -16,8 +16,8 @@ from app.schemas import DetailLevel, EstimationRequest, OutputFormat, ProjectTyp
 
 DEFAULT_MAX_TOKENS = 8192
 
-# Versión del prompt CAG + plantilla de usuario (expuesta en la API).
-ESTIMATION_PROMPT_VERSION = "cag-estimation-form-v1"
+# Versión de las plantillas Jinja en ``app/prompts/<version>/`` (expuesta en la API).
+ESTIMATION_PROMPT_VERSION = "v1"
 
 _SYSTEM_ROLE = """Eres un estimador de software experto. Tu tarea es producir estimaciones de esfuerzo, coste y planificación basándote en:
 
@@ -138,7 +138,7 @@ async def stream_estimation(
     outcome_holder: List[EstimationOutcome],
 ) -> AsyncIterator[str]:
     """
-    Igual que `generate_estimation`, pero emite la estimación por fragmentos (streaming).
+    Igual que :func:`complete_estimation`, pero emite la estimación por fragmentos (streaming).
 
     Tras consumir el iterador, el resultado completo y metadatos quedan en *outcome_holder*
     (tokens, caché, coste y modelo efectivo según el wrapper LiteLLM).
@@ -177,18 +177,14 @@ async def stream_estimation(
     )
 
 
-async def generate_estimation(
-    body: EstimationRequest,
-) -> EstimationOutcome:
+async def complete_estimation(system_prompt: str, user_message: str) -> EstimationOutcome:
     """
-    Envía [system] = rol + ejemplos CAG, [user] = descripción tipada (:class:`EstimationRequest`).
+    Llama al wrapper LiteLLM con ``role=system`` y ``role=user`` como mensajes separados
+    (no concatenados).
 
     El router LiteLLM usa ``PRIMARY_MODEL`` (OpenAI) y ``FALLBACK_MODEL`` (Anthropic);
     el orden depende de ``LLM_PROVIDER``. Se requiere al menos una API key (fallback opcional).
     """
-    user_message = build_estimation_user_message(body)
-
-    system_prompt = build_system_prompt()
     wrapper = get_llm_wrapper()
 
     t0 = time.perf_counter()
@@ -208,5 +204,4 @@ async def generate_estimation(
     if not rendered:
         raise RuntimeError("El proveedor devolvió contenido vacío")
 
-    outcome = _wrapper_result_to_outcome({**result, "estimation": rendered}, elapsed_s=elapsed_s)
-    return outcome
+    return _wrapper_result_to_outcome({**result, "estimation": rendered}, elapsed_s=elapsed_s)

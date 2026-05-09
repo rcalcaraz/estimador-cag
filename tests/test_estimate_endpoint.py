@@ -44,10 +44,10 @@ def patch_generate(
     monkeypatch: pytest.MonkeyPatch,
     sample_outcome: EstimationOutcome,
 ) -> None:
-    async def fake_generate(body: EstimationRequest) -> EstimationOutcome:
+    async def fake_complete(_system: str, _user: str) -> EstimationOutcome:
         return sample_outcome
 
-    monkeypatch.setattr(estimations_router, "generate_estimation", fake_generate)
+    monkeypatch.setattr(estimations_router, "complete_estimation", fake_complete)
 
 
 @pytest.fixture
@@ -98,10 +98,10 @@ def test_estimate_returns_200_and_matches_schema(
 
 
 def test_estimate_value_error_returns_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def bad(_body: EstimationRequest) -> NoReturn:
+    async def bad(_system: str, _user: str) -> NoReturn:
         raise ValueError("entrada inválida")
 
-    monkeypatch.setattr(estimations_router, "generate_estimation", bad)
+    monkeypatch.setattr(estimations_router, "complete_estimation", bad)
     response = client.post("/api/v1/estimate", json=_valid_payload())
     assert response.status_code == 400
     assert "entrada inválida" in response.json()["detail"]
