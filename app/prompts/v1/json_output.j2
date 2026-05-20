@@ -1,10 +1,9 @@
-## Formato de salida obligatorio (JSON)
+<output_format required="json">
+  <instructions>
+    Responde únicamente con un objeto JSON válido: sin markdown, sin texto antes ni después, sin bloques de código.
+  </instructions>
 
-Responde **únicamente** con un objeto JSON válido: sin markdown, sin texto antes ni después, sin bloques ```.
-
-Esquema (mismo idioma que la descripción del proyecto):
-
-```json
+  <schema language="same_as_project_description">
 {
   "summary": "Una frase que resume el alcance y los supuestos principales de la estimación.",
   "phases": [
@@ -22,19 +21,21 @@ Esquema (mismo idioma que la descripción del proyecto):
     "currency": "EUR"
   }
 }
-```
+  </schema>
 
-Reglas:
-- `summary`: una sola frase introductoria (como en un informe para el cliente).
-- `phases`: lista ordenada de fases u hitos; cada una con `name`, `description`, `weeks` (número, puede ser decimal) y `cost` en la moneda de `totals.currency`.
-- `totals.duration_weeks`: suma coherente con las semanas de las fases (redondeo razonable).
-- `totals.cost`: suma coherente con los costes por fase.
-- `totals.confidence_pct`: confianza **global** (0–100) en la estimación agregada.
-- No incluyas campos extra (sin supuestos por ítem, sin equipo, sin riesgos en JSON).
+  <rules>
+    <rule field="summary">Una sola frase introductoria (como en un informe para el cliente).</rule>
+    <rule field="phases">Lista ordenada de fases u hitos; cada una con `name`, `description`, `weeks` (número, puede ser decimal) y `cost` en la moneda de `totals.currency`.</rule>
+    <rule field="totals.duration_weeks">Suma coherente con las semanas de las fases (redondeo razonable).</rule>
+    <rule field="totals.cost">Suma coherente con los costes por fase.</rule>
+    <rule field="totals.confidence_pct">Confianza global (0–100) en la estimación agregada.</rule>
+    <rule>No incluyas campos extra (sin supuestos por ítem, sin equipo, sin riesgos en JSON).</rule>
 {% if detail_level.value == "summary" %}
-- Nivel **summary**: 3–5 fases como máximo; descripciones concisas (1–2 frases).
+    <rule detail_level="summary">3–5 fases como máximo; descripciones concisas (1–2 frases).</rule>
 {% elif detail_level.value == "detailed" %}
-- Nivel **detailed**: descripciones algo más ricas (hasta 4 frases por fase).
+    <rule detail_level="detailed">Descripciones algo más ricas (hasta 4 frases por fase).</rule>
 {% else %}
-- Nivel **medium**: equilibrio entre número de fases y detalle en cada `description`.
+    <rule detail_level="medium">Equilibrio entre número de fases y detalle en cada `description`.</rule>
 {% endif %}
+  </rules>
+</output_format>

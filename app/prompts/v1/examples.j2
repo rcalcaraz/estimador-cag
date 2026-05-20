@@ -1,11 +1,10 @@
-### Ejemplo 1
-**Resumen del encargo:**
+<example id="1">
+  <assignment_summary>
 Una academia de idiomas quiere una plataforma web propia para impartir clases en directo, dejar grabaciones bajo demanda, gestionar matrículas y enviar deberes a los alumnos. Pagos con tarjeta y SEPA, cupones de descuento, facturación automática y un panel para profesores con asistencia y notas. Sin app móvil nativa en esta fase.
-
-**Estimación generada entonces:**
-## Estimación: Plataforma web de academia de idiomas
-
-### Desglose de tareas
+  </assignment_summary>
+  <historical_estimation>
+    <title>Plataforma web de academia de idiomas</title>
+    <task_breakdown>
 1. Discovery, arquitectura de información y diseño UI responsive: 38 h · 3.040 €
 2. Aulas en directo (integración con proveedor WebRTC) y chat de clase: 56 h · 4.480 €
 3. Biblioteca de grabaciones, transcodificación y control de accesos por matrícula: 44 h · 3.520 €
@@ -15,20 +14,21 @@ Una academia de idiomas quiere una plataforma web propia para impartir clases en
 7. Notificaciones email/transaccionales y recordatorios automáticos de clase: 18 h · 1.440 €
 8. Pruebas (API, E2E críticos del flujo de pago y aula) y UAT con 2 profesores: 28 h · 2.240 €
 9. Despliegue, observabilidad básica y manual de uso: 16 h · 1.280 €
+    </task_breakdown>
+    <totals>332 h · ~26.560 € (tarifa media orientativa 80 €/h)</totals>
+    <team>1 full-stack lead, 1 frontend, 0,5 backend de pagos; soporte puntual de DevOps</team>
+    <duration>10–12 semanas calendario (1 sprint de diseño + 4–5 de implementación + UAT)</duration>
+    <risks_assumptions>proveedor WebRTC y pasarela elegidos antes del sprint 1; contenidos de cursos provistos por la academia; sin app nativa ni examen oficial integrado en esta fase.</risks_assumptions>
+  </historical_estimation>
+</example>
 
-**Total estimado: 332 h · ~26.560 €** (tarifa media orientativa 80 €/h)
-**Equipo recomendado:** 1 full-stack lead, 1 frontend, 0,5 backend de pagos; soporte puntual de DevOps
-**Duración estimada:** 10–12 semanas calendario (1 sprint de diseño + 4–5 de implementación + UAT)
-**Riesgos / supuestos:** proveedor WebRTC y pasarela elegidos antes del sprint 1; contenidos de cursos provistos por la academia; sin app nativa ni examen oficial integrado en esta fase.
-
-### Ejemplo 2
-**Resumen del encargo:**
+<example id="2">
+  <assignment_summary>
 Una clínica veterinaria quiere lanzar un servicio de telemedicina para mascotas: los dueños solicitan consulta por chat o videollamada, el veterinario contesta en horario, queda historial breve por mascota y se puede emitir receta digital firmada. Pagos por consulta, sin integración con su software de gestión actual en esta fase.
-
-**Estimación generada entonces:**
-## Estimación: Telemedicina veterinaria (web + videoconsulta)
-
-### Desglose de tareas
+  </assignment_summary>
+  <historical_estimation>
+    <title>Telemedicina veterinaria (web + videoconsulta)</title>
+    <task_breakdown>
 1. Diseño UX del flujo dueño/veterinario y revisión legal RGPD básica: 32 h · 2.560 €
 2. Registro de mascotas, ficha breve y subida de adjuntos (fotos, analíticas): 30 h · 2.400 €
 3. Cola de consultas, asignación a veterinario y agenda con franjas horarias: 36 h · 2.880 €
@@ -38,20 +38,21 @@ Una clínica veterinaria quiere lanzar un servicio de telemedicina para mascotas
 7. Panel de veterinario (cola, historial, notas internas) y panel de admin: 32 h · 2.560 €
 8. Pruebas E2E del flujo crítico (pago → consulta → receta) y prueba con 3 clínicas piloto: 26 h · 2.080 €
 9. Despliegue, alertas de errores y formación corta al equipo veterinario: 14 h · 1.120 €
+    </task_breakdown>
+    <totals>270 h · ~21.600 € (tarifa media orientativa 80 €/h)</totals>
+    <team>1 full-stack senior, 1 frontend, 0,25 diseñador UX; asesoría legal externa puntual</team>
+    <duration>9–11 semanas calendario (la integración del proveedor de firma suele añadir 1 semana)</duration>
+    <risks_assumptions>se asume proveedor WebRTC y firma electrónica acordados antes del sprint 1; sin integración con el software de gestión clínica en esta fase; consentimiento informado revisado por el cliente.</risks_assumptions>
+  </historical_estimation>
+</example>
 
-**Total estimado: 270 h · ~21.600 €** (tarifa media orientativa 80 €/h)
-**Equipo recomendado:** 1 full-stack senior, 1 frontend, 0,25 diseñador UX; asesoría legal externa puntual
-**Duración estimada:** 9–11 semanas calendario (la integración del proveedor de firma suele añadir 1 semana)
-**Riesgos / supuestos:** se asume proveedor WebRTC y firma electrónica acordados antes del sprint 1; sin integración con el software de gestión clínica en esta fase; consentimiento informado revisado por el cliente.
-
-### Ejemplo 3
-**Resumen del encargo:**
+<example id="3">
+  <assignment_summary>
 Un ayuntamiento mediano quiere modernizar la reserva de pistas deportivas municipales (pádel, tenis, fútbol sala). Hoy funciona por teléfono. Quieren web pública con disponibilidad en tiempo real, pago opcional online (algunas pistas son gratuitas con padrón), avisos por SMS o email y un panel de operadores. Login de vecinos contra el sistema de identidad municipal existente.
-
-**Estimación generada entonces:**
-## Estimación: Reserva de pistas deportivas municipales
-
-### Desglose de tareas
+  </assignment_summary>
+  <historical_estimation>
+    <title>Reserva de pistas deportivas municipales</title>
+    <task_breakdown>
 1. Análisis con operaciones, mapeado de pistas y diseño UI accesible (WCAG AA): 30 h · 2.400 €
 2. Catálogo de instalaciones, calendario y motor de disponibilidad por franjas: 44 h · 3.520 €
 3. Integración de identidad municipal (OIDC) y verificación de padrón vía API: 26 h · 2.080 €
@@ -61,8 +62,10 @@ Un ayuntamiento mediano quiere modernizar la reserva de pistas deportivas munici
 7. Auditoría de accesos, exportes para intervención y backup configurado: 16 h · 1.280 €
 8. QA E2E (reserva con y sin pago), pruebas de carga ligera y UAT con personal: 24 h · 1.920 €
 9. Despliegue, documentación y formación a 6 operadores: 14 h · 1.120 €
-
-**Total estimado: 240 h · ~19.200 €** (tarifa media orientativa 80 €/h)
-**Equipo recomendado:** 1 backend senior, 1 frontend, 0,25 QA; coordinación con IT del ayuntamiento
-**Duración estimada:** 8–10 semanas calendario (la integración con identidad y padrón suele alargar la fase 2)
-**Riesgos / supuestos:** disponibilidad de entorno de pruebas del sistema de identidad y del TPV antes del sprint 2; las normativas de uso por instalación las provee el ayuntamiento; sin app móvil nativa en esta fase.
+    </task_breakdown>
+    <totals>240 h · ~19.200 € (tarifa media orientativa 80 €/h)</totals>
+    <team>1 backend senior, 1 frontend, 0,25 QA; coordinación con IT del ayuntamiento</team>
+    <duration>8–10 semanas calendario (la integración con identidad y padrón suele alargar la fase 2)</duration>
+    <risks_assumptions>disponibilidad de entorno de pruebas del sistema de identidad y del TPV antes del sprint 2; las normativas de uso por instalación las provee el ayuntamiento; sin app móvil nativa en esta fase.</risks_assumptions>
+  </historical_estimation>
+</example>
