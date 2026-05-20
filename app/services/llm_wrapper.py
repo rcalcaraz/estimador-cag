@@ -7,12 +7,14 @@ from typing import Any
 
 import litellm
 import structlog
-from litellm import Router
+from litellm import Router, get_model_info
+from litellm.cost_calculator import get_response_cost_from_hidden_params
 
 from app.services.cache import EstimationCache
 
 log = structlog.get_logger()
 
+# Respaldo si LiteLLM no tiene tarifa para el modelo (precios USD por 1M tokens).
 MODEL_COSTS: dict[str, dict[str, float]] = {
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
     "gpt-4o": {"input": 2.50, "output": 10.00},
@@ -23,7 +25,16 @@ MODEL_COSTS: dict[str, dict[str, float]] = {
 
 
 def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
+    """Coste USD a partir de tarifas LiteLLM o, en último caso, MODEL_COSTS."""
     base = _normalise_model_name(model)
+    try:
+        info = get_model_info(base)
+        inp_rate = float(info.get("input_cost_per_token") or 0)
+        out_rate = float(info.get("output_cost_per_token") or 0)
+        if inp_rate or out_rate:
+            return round(tokens_in * inp_rate + tokens_out * out_rate, 6)
+    except Exception:
+        pass
     costs = MODEL_COSTS.get(base) or MODEL_COSTS.get(model) or {"input": 0.0, "output": 0.0}
     return round((tokens_in * costs["input"] + tokens_out * costs["output"]) / 1_000_000, 6)
 
@@ -57,6 +68,17 @@ def _provider_from_model(model: str) -> str:
     if name.startswith("gpt") or name.startswith("o1") or name.startswith("o3"):
         return "openai"
     return "unknown"
+
+
+def _hidden_params_dict(response: Any) -> dict[str, Any]:
+    hidden = getattr(response, "_hidden_params", None)
+    if hidden is None:
+        return {}
+    if hasattr(hidden, "model_dump"):
+        return hidden.model_dump()
+    if isinstance(hidden, dict):
+        return hidden
+    return {}
 
 
 class LLMWrapper:
@@ -159,7 +181,11 @@ class LLMWrapper:
             raise
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
-        result = self._normalise_response(response, latency_ms=latency_ms)
+        result = self._normalise_response(
+            response,
+            latency_ms=latency_ms,
+            model_override=model_override,
+        )
         log.info(
             "llm_call_completed",
             model=result["model"],
@@ -218,23 +244,110 @@ class LLMWrapper:
             )
         return await self.router.acompletion(model=self.ROUTER_MODEL_GROUP, **kwargs)
 
-    @staticmethod
-    def _normalise_response(response: Any, *, latency_ms: int) -> dict[str, Any]:
+    def _resolve_billing_model(
+        self,
+        response: Any,
+        *,
+        model_override: str | None,
+    ) -> str:
+        """
+        Modelo usado para tarificar. El Router devuelve el nombre del grupo (p. ej. ``estimator``),
+        no el deployment real (``gpt-4o-mini``).
+        """
+        if model_override:
+            return _normalise_model_name(model_override)
+
+        raw = _normalise_model_name(getattr(response, "model", "") or "")
+        if raw and raw != self.ROUTER_MODEL_GROUP:
+            return raw
+
+        hidden = _hidden_params_dict(response)
+        litellm_name = hidden.get("litellm_model_name")
+        if litellm_name:
+            name = _normalise_model_name(str(litellm_name))
+            if name and name != self.ROUTER_MODEL_GROUP:
+                return name
+
+        model_id = hidden.get("model_id")
+        if model_id:
+            try:
+                deployment = self.router.get_deployment(model_id=str(model_id))
+            except Exception:
+                deployment = None
+            if deployment is not None:
+                dep_model = deployment.litellm_params.model
+                if dep_model:
+                    return _normalise_model_name(dep_model)
+
+        return self.primary_model
+
+    def _compute_cost_usd(
+        self,
+        response: Any,
+        *,
+        billing_model: str,
+        usage: dict[str, int],
+    ) -> float:
+        hidden = _hidden_params_dict(response)
+        provider_cost = get_response_cost_from_hidden_params(hidden)
+        if provider_cost is not None:
+            return round(float(provider_cost), 6)
+
+        raw_hidden_cost = hidden.get("response_cost")
+        if raw_hidden_cost is not None:
+            try:
+                return round(float(raw_hidden_cost), 6)
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            litellm_cost = litellm.completion_cost(
+                completion_response=response,
+                model=billing_model,
+                call_type="acompletion",
+            )
+            if litellm_cost > 0:
+                return round(litellm_cost, 6)
+        except Exception:
+            log.warning(
+                "litellm_completion_cost_failed",
+                billing_model=billing_model,
+                exc_info=True,
+            )
+
+        return _estimate_cost(
+            billing_model,
+            usage["input_tokens"],
+            usage["output_tokens"],
+        )
+
+    def _normalise_response(
+        self,
+        response: Any,
+        *,
+        latency_ms: int,
+        model_override: str | None = None,
+    ) -> dict[str, Any]:
         choice = response.choices[0]
         finish_reason = (choice.finish_reason or "stop").lower()
         usage_norm = _usage_dict_from_litellm(response.usage)
         if usage_norm is None:
             usage_norm = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
-        model = _normalise_model_name(response.model)
+        billing_model = self._resolve_billing_model(
+            response, model_override=model_override
+        )
+        cost_usd = self._compute_cost_usd(
+            response,
+            billing_model=billing_model,
+            usage=usage_norm,
+        )
         return {
             "estimation": choice.message.content or "",
-            "model": model,
-            "provider": _provider_from_model(model),
+            "model": billing_model,
+            "provider": _provider_from_model(billing_model),
             "finish_reason": finish_reason,
             "usage": usage_norm,
             "latency_ms": latency_ms,
-            "cost_usd": _estimate_cost(
-                model, usage_norm["input_tokens"], usage_norm["output_tokens"]
-            ),
+            "cost_usd": cost_usd,
         }

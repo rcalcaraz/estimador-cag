@@ -326,10 +326,16 @@ def _total_tokens(last: EstimationResponse) -> int | None:
     return None
 
 
-def _format_cost_usd(value: float | None) -> str:
+def _format_cost_usd(value: float | None, *, total_tokens: int | None = None) -> str:
     if value is None:
         return "—"
-    return f"${value:.6f}"
+    if value == 0 and total_tokens and total_tokens > 0:
+        return "no calculado"
+    if 0 < value < 0.0001:
+        return f"${value:.8f}".rstrip("0").rstrip(".")
+    if value < 0.01:
+        return f"${value:.6f}"
+    return f"${value:.4f}"
 
 
 def _format_model_label(response: EstimationResponse) -> str:
@@ -385,7 +391,10 @@ def _render_cag_sidebar() -> None:
     st.sidebar.caption(f"**cache_kind:** `{kind.value}` · **cache_hit:** `{last.cache_hit}`")
 
     st.sidebar.metric("Tokens totales", _format_token_value(_total_tokens(last)))
-    st.sidebar.metric("Coste solicitud", _format_cost_usd(last.cost_usd))
+    st.sidebar.metric(
+        "Coste solicitud",
+        _format_cost_usd(last.cost_usd, total_tokens=_total_tokens(last)),
+    )
 
     st.sidebar.caption(
         f"Desglose: **{_format_token_value(last.input_tokens)}** in · "

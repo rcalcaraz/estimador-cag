@@ -7,7 +7,7 @@ import fakeredis
 import pytest
 
 from app.services.cache import EstimationCache
-from app.services.llm_wrapper import LLMWrapper, _estimate_cost
+from app.services.llm_wrapper import LLMWrapper, _estimate_cost, _normalise_model_name
 
 
 def _fake_completion(
@@ -50,6 +50,36 @@ def wrapper() -> LLMWrapper:
 def test_estimate_cost_uses_pricing_table() -> None:
     cost = _estimate_cost("gpt-4o-mini", 1_000_000, 1_000_000)
     assert cost == pytest.approx(0.75)
+
+
+def test_estimate_cost_unknown_dated_model_via_litellm() -> None:
+    cost = _estimate_cost("gpt-4o-mini-2024-07-18", 2337, 369)
+    assert cost > 0
+
+
+def test_resolve_billing_model_from_router_group_name(wrapper: LLMWrapper) -> None:
+    fake = _fake_completion(model="estimator", content="ok", input_tokens=2337, output_tokens=369)
+    fake._hidden_params = {"litellm_model_name": "gpt-4o-mini"}
+    billing = wrapper._resolve_billing_model(fake, model_override=None)
+    assert billing == "gpt-4o-mini"
+    assert _normalise_model_name("estimator") == wrapper.ROUTER_MODEL_GROUP
+
+
+@pytest.mark.asyncio
+async def test_acomplete_router_group_name_nonzero_cost(wrapper: LLMWrapper) -> None:
+    fake = _fake_completion(model="estimator", content="priced", input_tokens=2337, output_tokens=369)
+    fake._hidden_params = {"litellm_model_name": "gpt-4o-mini"}
+    with patch.object(wrapper.router, "acompletion", return_value=fake):
+        result = await wrapper.acomplete(
+            system_prompt="sys",
+            user_message="usr",
+            model_override=None,
+            max_tokens=4000,
+            thinking_budget=None,
+            temperature=0.3,
+        )
+    assert result["model"] == "gpt-4o-mini"
+    assert result["cost_usd"] > 0
 
 
 @pytest.mark.asyncio
