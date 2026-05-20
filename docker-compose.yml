@@ -64,7 +64,8 @@ services:
       - ./app:/app/app
       - ./streamlit_app.py:/app/streamlit_app.py
     command: >
-      streamlit run /app/streamlit_app.py
+      sh -c "find /app/app -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true;
+      exec streamlit run /app/streamlit_app.py
       --server.address 0.0.0.0
-      --server.port 8501
+      --server.port 8501"
     restart: unless-stopped

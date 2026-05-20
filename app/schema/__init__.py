@@ -2,11 +2,10 @@
 
 from app.schemas import (
     DetailLevel,
-    EstimationItem,
+    EstimationPhase,
     EstimationRequest,
     EstimationResponse,
     EstimationTotals,
-    NarrativeBlock,
     OutputFormat,
     ProjectType,
     StructuredEstimation,
@@ -14,11 +13,10 @@ from app.schemas import (
 
 __all__ = [
     "DetailLevel",
-    "EstimationItem",
+    "EstimationPhase",
     "EstimationRequest",
     "EstimationResponse",
     "EstimationTotals",
-    "NarrativeBlock",
     "OutputFormat",
     "ProjectType",
     "StructuredEstimation",

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -30,56 +30,97 @@ class EstimationRequest(BaseModel):
     output_format: OutputFormat
 
 
-class EstimationItem(BaseModel):
-    """Fase, hito o partida del desglose."""
+class EstimationPhase(BaseModel):
+    """Fase o hito del desglose mostrado en la UI."""
 
     name: str = Field(min_length=1)
-    hours: Optional[float] = Field(default=None, ge=0)
-    cost: Optional[float] = Field(default=None, ge=0)
-    notes: Optional[str] = None
-    assumptions: list[str] = Field(default_factory=list)
-    confidence_pct: Optional[int] = Field(default=None, ge=0, le=100)
+    description: str = Field(min_length=1)
+    weeks: float = Field(ge=0)
+    cost: float = Field(ge=0)
 
 
 class EstimationTotals(BaseModel):
-    hours: Optional[float] = Field(default=None, ge=0)
-    cost: Optional[float] = Field(default=None, ge=0)
-    hourly_rate_note: Optional[str] = None
-    confidence_pct: Optional[int] = Field(
-        default=None,
-        ge=0,
-        le=100,
-        description="Confianza global (0–100) en los totales agregados de la estimación.",
-    )
+    duration_weeks: float = Field(ge=0)
+    cost: float = Field(ge=0)
+    confidence_pct: int = Field(ge=0, le=100)
+    currency: str = Field(default="EUR", min_length=1)
 
 
-class NarrativeBlock(BaseModel):
-    title: str = Field(min_length=1)
-    content: str = Field(min_length=1)
+def normalize_estimation_dict(data: Any) -> dict[str, Any]:
+    """
+    Adapta respuestas del esquema anterior (title, items, hours) al contrato actual.
+    Útil para caché Redis antigua y para clientes que aún no se han reiniciado.
+    """
+    if not isinstance(data, dict):
+        raise TypeError("La estimación debe ser un objeto JSON")
+
+    d = dict(data)
+
+    if "summary" not in d:
+        if isinstance(d.get("title"), str):
+            d["summary"] = d.pop("title")
+        elif isinstance(d.get("executive_summary"), str):
+            d["summary"] = d.pop("executive_summary")
+
+    if "phases" not in d and isinstance(d.get("items"), list):
+        phases: list[dict[str, Any]] = []
+        for item in d["items"]:
+            if not isinstance(item, dict):
+                continue
+            desc = item.get("description") or item.get("notes") or item.get("name") or ""
+            weeks = item.get("weeks")
+            if weeks is None and item.get("hours") is not None:
+                weeks = max(0.5, float(item["hours"]) / 40.0)
+            phases.append(
+                {
+                    "name": str(item.get("name") or "Phase"),
+                    "description": str(desc),
+                    "weeks": float(weeks if weeks is not None else 1),
+                    "cost": float(item.get("cost") or 0),
+                }
+            )
+        d["phases"] = phases
+        d.pop("items", None)
+
+    totals = d.get("totals")
+    if isinstance(totals, dict):
+        t = dict(totals)
+        if "duration_weeks" not in t and t.get("hours") is not None:
+            t["duration_weeks"] = max(1.0, float(t["hours"]) / 40.0)
+        t.setdefault("cost", 0.0)
+        t.setdefault("duration_weeks", 1.0)
+        t.setdefault("confidence_pct", 50)
+        t.setdefault("currency", d.get("currency") or "EUR")
+        d["totals"] = t
+
+    for key in (
+        "title",
+        "executive_summary",
+        "items",
+        "narrative_blocks",
+        "recommended_team",
+        "estimated_duration",
+        "risks_and_assumptions",
+        "currency",
+    ):
+        d.pop(key, None)
+
+    return d
 
 
 class StructuredEstimation(BaseModel):
     """Cuerpo estructurado de la estimación devuelto por el LLM y validado por la API."""
 
-    title: str = Field(min_length=1)
-    currency: str = Field(default="EUR", min_length=1)
-    executive_summary: Optional[str] = None
-    items: list[EstimationItem] = Field(default_factory=list)
+    summary: str = Field(min_length=1)
+    phases: list[EstimationPhase] = Field(min_length=1)
     totals: EstimationTotals
-    recommended_team: Optional[str] = None
-    estimated_duration: Optional[str] = None
-    risks_and_assumptions: list[str] = Field(default_factory=list)
-    narrative_blocks: Optional[list[NarrativeBlock]] = None
 
-    @model_validator(mode="after")
-    def _has_content(self) -> "StructuredEstimation":
-        has_items = len(self.items) > 0
-        has_narrative = bool(self.narrative_blocks)
-        if not has_items and not has_narrative:
-            raise ValueError(
-                "La estimación debe incluir al menos un ítem en 'items' o un bloque en 'narrative_blocks'"
-            )
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_payload(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return normalize_estimation_dict(data)
+        return data
 
 
 class EstimationResponse(BaseModel):
@@ -93,3 +134,12 @@ class EstimationResponse(BaseModel):
     total_tokens: Optional[int] = None
     response_time_seconds: Optional[float] = None
     cost_usd: Optional[float] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_estimation(cls, data: Any) -> Any:
+        if isinstance(data, dict) and isinstance(data.get("estimation"), dict):
+            payload = dict(data)
+            payload["estimation"] = normalize_estimation_dict(payload["estimation"])
+            return payload
+        return data

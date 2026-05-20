@@ -2,50 +2,39 @@
 
 Responde **únicamente** con un objeto JSON válido: sin markdown, sin texto antes ni después, sin bloques ```.
 
-El JSON debe cumplir este esquema (mismo idioma que la descripción del proyecto):
+Esquema (mismo idioma que la descripción del proyecto):
 
 ```json
 {
-  "title": "Título breve de la estimación",
-  "currency": "EUR",
-  "executive_summary": "Síntesis opcional (recomendada si detail_level es summary)",
-  "items": [
+  "summary": "Una frase que resume el alcance y los supuestos principales de la estimación.",
+  "phases": [
     {
-      "name": "Nombre de fase, hito o partida",
-      "hours": 40,
-      "cost": 3200,
-      "notes": "Notas opcionales",
-      "assumptions": ["Supuesto 1"],
-      "confidence_pct": 75
+      "name": "Discovery & Requirements",
+      "description": "Breve párrafo (2–4 frases) sobre el trabajo de esta fase.",
+      "weeks": 2,
+      "cost": 2500
     }
   ],
   "totals": {
-    "hours": 215,
-    "cost": 17200,
-    "hourly_rate_note": "Tarifa orientativa 80 €/h",
-    "confidence_pct": 68
-  },
-  "recommended_team": "Roles y dedicación",
-  "estimated_duration": "Duración en semanas calendario",
-  "risks_and_assumptions": ["Riesgo o supuesto global 1"],
-  "narrative_blocks": [
-    {"title": "Sección", "content": "Párrafo narrativo con cifras"}
-  ]
+    "duration_weeks": 10,
+    "cost": 32500,
+    "confidence_pct": 65,
+    "currency": "EUR"
+  }
 }
 ```
 
 Reglas:
-- `items`: lista de partidas con `name` obligatorio; incluye `hours` y/o `cost` cuando aplique.
-- `totals`: objeto obligatorio; al menos uno de `hours` o `cost` debe estar presente. Incluye siempre `confidence_pct` (0–100): confianza **global** en los totales agregados (no la media de los ítems; refleja incertidumbre del conjunto, alcance y supuestos globales).
-- `risks_and_assumptions`: array de strings (puede ser `[]`).
-- `narrative_blocks`: solo si el formato pedido es **narrative**; en ese caso puede complementar `items` o sustituir el desglose numérico si la narrativa ya incluye las cifras.
-{% if output_format.value == "phases_table" %}
-- Formato **phases_table**: cada elemento de `items` representa una fase u hito y debe incluir `confidence_pct` (entero 0–100 por ítem); `totals.confidence_pct` es obligatorio como confianza global.
-{% elif output_format.value == "line_items" %}
-- Formato **line_items**: cada elemento de `items` es una partida numerable; ordena por importancia o secuencia lógica.
+- `summary`: una sola frase introductoria (como en un informe para el cliente).
+- `phases`: lista ordenada de fases u hitos; cada una con `name`, `description`, `weeks` (número, puede ser decimal) y `cost` en la moneda de `totals.currency`.
+- `totals.duration_weeks`: suma coherente con las semanas de las fases (redondeo razonable).
+- `totals.cost`: suma coherente con los costes por fase.
+- `totals.confidence_pct`: confianza **global** (0–100) en la estimación agregada.
+- No incluyas campos extra (sin supuestos por ítem, sin equipo, sin riesgos en JSON).
+{% if detail_level.value == "summary" %}
+- Nivel **summary**: 3–5 fases como máximo; descripciones concisas (1–2 frases).
+{% elif detail_level.value == "detailed" %}
+- Nivel **detailed**: descripciones algo más ricas (hasta 4 frases por fase).
 {% else %}
-- Formato **narrative**: usa `narrative_blocks` para el cuerpo principal; puedes dejar `items` vacío `[]` si toda la estimación va en bloques narrativos.
-{% endif %}
-{% if detail_level.value == "detailed" %}
-- Nivel **detailed**: rellena `assumptions` en cada ítem de `items` que tenga supuestos específicos (no solo el array global).
+- Nivel **medium**: equilibrio entre número de fases y detalle en cada `description`.
 {% endif %}

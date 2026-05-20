@@ -1,6 +1,6 @@
 # estimator
 
-Servicio que recibe una **descripción de alcance** tipada (tipo de proyecto, nivel de detalle y formato de salida) y devuelve una **estimación de software** en **JSON estructurado** (`StructuredEstimation`: partidas, totales, confianza por ítem y global, riesgos, etc.) usando un modelo de lenguaje.
+Servicio que recibe una **descripción de alcance** tipada (tipo de proyecto, nivel de detalle y formato de salida) y devuelve una **estimación de software** en **JSON estructurado** (`StructuredEstimation`: resumen, fases con semanas y coste, totales con confianza global) usando un modelo de lenguaje.
 
 Los ejemplos de referencia se inyectan en el mensaje **system** (patrón **CAG**: contexto en la misma llamada, sin base vectorial). En **`POST /api/v1/estimate`** el texto de **system** y **user** se obtiene con plantillas **Jinja2** en `app/prompts/v1/` (`render_estimation_prompt`). El cliente LLM recibe **dos mensajes** con roles separados (`system` y `user`), no un único mensaje concatenado.
 
@@ -8,7 +8,7 @@ Las llamadas al modelo pasan por un **wrapper LiteLLM** (`app/services/llm_wrapp
 
 La forma prevista de ejecutar el proyecto es **con Docker**: misma versión de Python y dependencias para todo el mundo, sin instalar `uv` ni un virtualenv en la máquina host.
 
-Opcionalmente hay una **interfaz con formulario** en Streamlit (perfil `ui` en Compose): construye un `EstimationRequest`, llama a `POST .../api/v1/estimate` y renderiza la estimación estructurada (tabla de partidas, totales, confianza global). El panel lateral muestra **transparencia CAG** (vista de rol + ejemplos), **tokens**, modelo, **caché** y tiempo de respuesta. La URL base de la API se configura con **`ESTIMATOR_API_BASE_URL`** (en Compose apunta al servicio `estimator` en la red Docker).
+Opcionalmente hay una **interfaz Streamlit** (perfil `ui` en Compose): formulario → `POST .../api/v1/estimate` → vista tipo dashboard (tarjetas Duration / Cost / Confidence y tabla Phase · Weeks · Cost). Los metadatos del modelo (tokens, caché, coste API) van en el **sidebar**. La URL base se configura con **`ESTIMATOR_API_BASE_URL`**.
 
 **Redis** arranca **siempre** con Compose: la API y Streamlit usan **`REDIS_URL=redis://redis:6379`** en la red Docker (el `docker-compose.yml` lo inyecta y no hace falta cambiar el `.env` para eso). Sin Redis en marcha la caché falla y verás `cache_get_failed` en los logs.
 
@@ -157,8 +157,8 @@ flowchart TD
 El contrato está definido en Pydantic v2 en `app/schemas.py`:
 
 - **`EstimationRequest`**: `description` (20–2000 caracteres), `project_type`, `detail_level`, `output_format` (enums con valores en snake_case, p. ej. `mobile_app`, `summary`, `phases_table`).
-- **`EstimationResponse`**: `estimation` (`StructuredEstimation` con `title`, `items[]`, `totals`, `risks_and_assumptions`, etc.), `prompt_version`, `model`, `provider` (`openai` \| `anthropic`), `cache_hit`, tokens y `cost_usd`.
-- **`StructuredEstimation`**: cuerpo tipado de la estimación (`items` con `confidence_pct` por partida; `totals` con `hours`, `cost` y `confidence_pct` global; opcional `narrative_blocks` para formato narrativo).
+- **`EstimationResponse`**: `estimation` (`StructuredEstimation`) más metadatos (`prompt_version`, `model`, `provider`, `cache_hit`, tokens, `cost_usd`).
+- **`StructuredEstimation`**: `summary` (frase intro), `phases[]` (`name`, `description`, `weeks`, `cost`), `totals` (`duration_weeks`, `cost`, `confidence_pct`, `currency`).
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -259,7 +259,7 @@ estimator/
 ├── pyproject.toml            # Dependencias y metadatos del paquete
 ├── uv.lock                   # Lockfile de uv
 ├── README.md
-├── streamlit_app.py          # UI: formulario → POST /api/v1/estimate → tabla estructurada
+├── streamlit_app.py          # UI oscura: formulario o dashboard de fases
 ├── tests/
 │   ├── conftest.py           # Env de pytest y TestClient FastAPI
 │   ├── test_health.py

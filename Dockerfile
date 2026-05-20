@@ -1,16 +1,16 @@
 # =============================================================================
 # Stage 1 — Builder
 # =============================================================================
-# Multi-stage build: build tools (uv) stay out of the final image.
 FROM public.ecr.aws/docker/library/python:3.11-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock* ./
+COPY pyproject.toml uv.lock ./
+COPY app ./app
 
-RUN uv sync --no-install-project --no-dev
+RUN uv sync --frozen --no-dev
 
 
 # =============================================================================
@@ -24,15 +24,16 @@ RUN groupadd --system appgroup && \
 WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
-
-COPY app/ /app/app/
-COPY streamlit_app.py /app/streamlit_app.py
+COPY pyproject.toml uv.lock ./
+COPY app ./app
+COPY streamlit_app.py ./streamlit_app.py
 
 RUN chown -R appuser:appgroup /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH="/app"
 
 USER appuser
 

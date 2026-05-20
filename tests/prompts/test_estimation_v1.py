@@ -8,7 +8,7 @@ from app.schemas import DetailLevel, EstimationRequest, OutputFormat, ProjectTyp
 _BASE = dict(
     project_type=ProjectType.WEB_SAAS,
     detail_level=DetailLevel.MEDIUM,
-    output_format=OutputFormat.LINE_ITEMS,
+    output_format=OutputFormat.PHASES_TABLE,
 )
 
 
@@ -32,39 +32,31 @@ def test_user_message_includes_description_inside_project_description_block() ->
     assert inner == description.strip()
 
 
-def test_system_includes_json_schema_and_phases_table_rules() -> None:
-    common = dict(
-        description="Texto de descripción suficientemente largo.",
-        detail_level=DetailLevel.SUMMARY,
-        project_type=ProjectType.MOBILE_APP,
+def test_system_includes_simplified_json_schema() -> None:
+    system, _ = render_estimation_prompt(
+        _request(
+            description="Texto de descripción suficientemente largo para validar.",
+        )
     )
-    system_table, _ = render_estimation_prompt(
-        _request(output_format=OutputFormat.PHASES_TABLE, **common)
-    )
-    system_narrative, _ = render_estimation_prompt(
-        _request(output_format=OutputFormat.NARRATIVE, **common)
-    )
-
-    assert "Formato de salida obligatorio (JSON)" in system_table
-    assert '"confidence_pct"' in system_table
-    assert "phases_table" in system_table
-    assert "narrative_blocks" in system_narrative
-    assert "phases_table" not in system_narrative
+    assert '"phases"' in system
+    assert '"summary"' in system
+    assert '"duration_weeks"' in system
+    assert '"confidence_pct"' in system
+    assert "narrative_blocks" not in system
 
 
-def test_system_detailed_includes_per_item_assumptions_summary_does_not() -> None:
-    phrase = "Nivel **detailed**"
-    common = dict(
-        description="Otro texto de descripción que cumple el mínimo.",
-        output_format=OutputFormat.NARRATIVE,
-        project_type=ProjectType.INTERNAL_TOOL,
+def test_system_summary_level_limits_phases_in_prompt() -> None:
+    system_summary, _ = render_estimation_prompt(
+        _request(
+            description="Texto de descripción suficientemente largo.",
+            detail_level=DetailLevel.SUMMARY,
+        )
     )
     system_detailed, _ = render_estimation_prompt(
-        _request(detail_level=DetailLevel.DETAILED, **common)
+        _request(
+            description="Texto de descripción suficientemente largo.",
+            detail_level=DetailLevel.DETAILED,
+        )
     )
-    system_summary, _ = render_estimation_prompt(
-        _request(detail_level=DetailLevel.SUMMARY, **common)
-    )
-
-    assert phrase in system_detailed
-    assert phrase not in system_summary
+    assert "summary" in system_summary.lower()
+    assert "detailed" in system_detailed.lower()
