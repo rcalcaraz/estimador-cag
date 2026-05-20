@@ -49,7 +49,8 @@ Los comandos de este README se ejecutan desde la carpeta **`estimator/`**, donde
    Con el perfil `ui`, Compose fija **`ESTIMATOR_API_BASE_URL=http://estimator:8000`** en el servicio Streamlit para que las peticiones vayan al contenedor de la API en la red interna.
 
 4. Documentación interactiva de la API: [http://localhost:8000/docs](http://localhost:8000/docs)  
-   Streamlit (si usaste el perfil `ui`): [http://localhost:8501](http://localhost:8501)
+   Streamlit (si usaste el perfil `ui`): [http://localhost:8501](http://localhost:8501)  
+   RedisInsight (caché Redis): [http://localhost:8001](http://localhost:8001)
 
 El `docker-compose.yml` monta `app/` y `streamlit_app.py` para desarrollo. **Producción:** quita esos volúmenes y el `command` con `--reload`; la imagen usa `uvicorn` sin recarga y un `HEALTHCHECK` sobre `GET /health`.
 
@@ -59,9 +60,10 @@ Tras cambiar `.env`, reinicia los contenedores (`docker compose down` y vuelve a
 
 ## Redis y caché
 
-- **Con Docker Compose:** el servicio `redis` sube siempre; `estimator` y `streamlit` esperan a que Redis esté sano y reciben **`REDIS_URL=redis://redis:6379`** por variables de entorno del compose (sustituye el `localhost` del `.env`).
+- **Con Docker Compose:** el servicio `redis` usa **Redis Stack** (`redis/redis-stack:7.4.0-v0`); `estimator` y `streamlit` esperan a que Redis esté sano y reciben **`REDIS_URL=redis://redis:6379`** por variables de entorno del compose (sustituye el `localhost` del `.env`).
+- **RedisInsight (GUI):** con Compose en marcha, abre **http://localhost:8001** en el navegador. Conecta a la base por defecto (`db0`); las claves de caché tienen prefijo `estimation:`.
 - **Sin Redis** (solo si cae el contenedor o no usas Compose): la aplicación sigue respondiendo; los accesos a caché fallan de forma controlada (`cache_get_failed` en logs).
-- **Sin Compose, en el host:** Redis en `localhost` y en `.env` **`REDIS_URL=redis://localhost:6379`** (adecuado para `uv run uvicorn` / Streamlit en local).
+- **Sin Compose, en el host:** Redis en `localhost` y en `.env` **`REDIS_URL=redis://localhost:6379`** (adecuado para `uv run uvicorn` / Streamlit en local; sin RedisInsight salvo que instales Stack aparte).
 
 La clave de caché incluye el texto **system** y **user** completos y el modelo; si cambias plantillas o parámetros del encargo, no se reutiliza una respuesta antigua por error.
 
@@ -184,7 +186,7 @@ En [http://localhost:8000/docs](http://localhost:8000/docs) verás el esquema Op
 
 ## Puerto ya en uso
 
-Si **8000**, **8501** o **6379** están ocupados en tu máquina, puedes liberarlos o ajustar el mapeo de puertos en `docker-compose.yml`. En macOS/Linux, para ver qué usa el 8000:
+Si **8000**, **8501**, **6379** o **8001** están ocupados en tu máquina, puedes liberarlos o ajustar el mapeo de puertos en `docker-compose.yml`. En macOS/Linux, para ver qué usa el 8000:
 
 ```bash
 lsof -iTCP:8000 -sTCP:LISTEN

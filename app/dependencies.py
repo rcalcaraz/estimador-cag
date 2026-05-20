@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Optional
+
+from openai import OpenAI
 
 from app.config import get_settings
 from app.services.cache import EstimationCache
@@ -13,6 +16,15 @@ from app.services.llm_wrapper import LLMWrapper
 def get_cache() -> EstimationCache:
     settings = get_settings()
     return EstimationCache.from_url(settings.redis_url, ttl=settings.cache_ttl)
+
+
+@lru_cache
+def get_openai_client() -> Optional[OpenAI]:
+    """Cliente OpenAI para la API de moderación en ``check_input``."""
+    settings = get_settings()
+    if not settings.openai_api_key:
+        return None
+    return OpenAI(api_key=settings.openai_api_key)
 
 
 @lru_cache

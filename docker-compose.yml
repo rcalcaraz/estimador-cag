@@ -4,14 +4,18 @@
 #
 # Solo API + Redis: docker compose up --build
 # Con Streamlit: docker compose --profile ui up --build
+# RedisInsight: http://localhost:8001
 
 services:
   redis:
-    # ECR Public (Amazon) evita pulls por CDN de Docker Hub que pueden fallar TLS en algunas redes.
-    image: public.ecr.aws/docker/library/redis:7-alpine
+    # Redis Stack incluye RedisInsight (puerto 8001) y módulos RediSearch/RedisJSON.
+    image: redis/redis-stack:7.4.0-v0
     container_name: lidr-estimator-redis
     ports:
       - "6379:6379"
+      - "8001:8001"  # RedisInsight UI → http://localhost:8001
+    volumes:
+      - redis_data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -69,3 +73,6 @@ services:
       --server.address 0.0.0.0
       --server.port 8501"
     restart: unless-stopped
+
+volumes:
+  redis_data:

@@ -23,6 +23,10 @@ class OutputFormat(str, Enum):
     NARRATIVE = "narrative"
 
 
+OUT_OF_SCOPE_PREFIX = "Out of scope:"
+LOW_CONFIDENCE_THRESHOLD = 30
+
+
 class EstimationRequest(BaseModel):
     description: str = Field(min_length=20, max_length=2000)
     project_type: ProjectType

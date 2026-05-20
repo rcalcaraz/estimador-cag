@@ -1,6 +1,11 @@
-import structlog
-from fastapi import APIRouter, HTTPException
+from dataclasses import replace
 
+import structlog
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.dependencies import get_openai_client
+from app.guardrails.input import InputGuardrailViolation, check_input
+from app.guardrails.output import enforce_scope_response
 from app.prompts.loader import render_estimation_prompt
 from app.schemas import EstimationRequest, EstimationResponse
 from app.services.llm_service import (
@@ -29,14 +34,42 @@ def _estimation_response_from_outcome(outcome: EstimationOutcome) -> EstimationR
 
 
 @router.post("/estimate", response_model=EstimationResponse)
-async def estimate(body: EstimationRequest) -> EstimationResponse:
+async def estimate(
+    body: EstimationRequest,
+    openai_client=Depends(get_openai_client),
+) -> EstimationResponse:
     """
     Genera una estimación de software a partir del cuerpo tipado (:class:`EstimationRequest`),
     usando plantillas Jinja (system + user) y contexto CAG en el system prompt.
     """
+    log.info(
+        "estimation_request_received",
+        project_type=body.project_type.value,
+        detail_level=body.detail_level.value,
+        output_format=body.output_format.value,
+        description_chars=len(body.description),
+    )
+
+    try:
+        check_input(body.description, openai_client=openai_client)
+    except InputGuardrailViolation as exc:
+        log.info(
+            "estimation_blocked_by_input_guardrail",
+            reason=exc.reason,
+            message=exc.message,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": exc.reason, "message": exc.message},
+        ) from exc
+
     system_prompt, user_message = render_estimation_prompt(body)
     try:
         outcome = await complete_estimation(system_prompt, user_message)
+        outcome = replace(
+            outcome,
+            estimation=enforce_scope_response(outcome.estimation),
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:

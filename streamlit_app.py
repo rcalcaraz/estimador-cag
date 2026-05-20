@@ -220,7 +220,11 @@ def _post_estimate(base_url: str, req: EstimationRequest) -> EstimationResponse:
         try:
             body = response.json()
             if isinstance(body, dict) and "detail" in body:
-                detail = str(body["detail"])
+                raw_detail = body["detail"]
+                if isinstance(raw_detail, dict) and "message" in raw_detail:
+                    detail = str(raw_detail["message"])
+                else:
+                    detail = str(raw_detail)
         except json.JSONDecodeError:
             pass
         raise RuntimeError(f"HTTP {response.status_code}: {detail}")
