@@ -1,0 +1,51 @@
+## Formato de salida obligatorio (JSON)
+
+Responde **únicamente** con un objeto JSON válido: sin markdown, sin texto antes ni después, sin bloques ```.
+
+El JSON debe cumplir este esquema (mismo idioma que la descripción del proyecto):
+
+```json
+{
+  "title": "Título breve de la estimación",
+  "currency": "EUR",
+  "executive_summary": "Síntesis opcional (recomendada si detail_level es summary)",
+  "items": [
+    {
+      "name": "Nombre de fase, hito o partida",
+      "hours": 40,
+      "cost": 3200,
+      "notes": "Notas opcionales",
+      "assumptions": ["Supuesto 1"],
+      "confidence_pct": 75
+    }
+  ],
+  "totals": {
+    "hours": 215,
+    "cost": 17200,
+    "hourly_rate_note": "Tarifa orientativa 80 €/h",
+    "confidence_pct": 68
+  },
+  "recommended_team": "Roles y dedicación",
+  "estimated_duration": "Duración en semanas calendario",
+  "risks_and_assumptions": ["Riesgo o supuesto global 1"],
+  "narrative_blocks": [
+    {"title": "Sección", "content": "Párrafo narrativo con cifras"}
+  ]
+}
+```
+
+Reglas:
+- `items`: lista de partidas con `name` obligatorio; incluye `hours` y/o `cost` cuando aplique.
+- `totals`: objeto obligatorio; al menos uno de `hours` o `cost` debe estar presente. Incluye siempre `confidence_pct` (0–100): confianza **global** en los totales agregados (no la media de los ítems; refleja incertidumbre del conjunto, alcance y supuestos globales).
+- `risks_and_assumptions`: array de strings (puede ser `[]`).
+- `narrative_blocks`: solo si el formato pedido es **narrative**; en ese caso puede complementar `items` o sustituir el desglose numérico si la narrativa ya incluye las cifras.
+{% if output_format.value == "phases_table" %}
+- Formato **phases_table**: cada elemento de `items` representa una fase u hito y debe incluir `confidence_pct` (entero 0–100 por ítem); `totals.confidence_pct` es obligatorio como confianza global.
+{% elif output_format.value == "line_items" %}
+- Formato **line_items**: cada elemento de `items` es una partida numerable; ordena por importancia o secuencia lógica.
+{% else %}
+- Formato **narrative**: usa `narrative_blocks` para el cuerpo principal; puedes dejar `items` vacío `[]` si toda la estimación va en bloques narrativos.
+{% endif %}
+{% if detail_level.value == "detailed" %}
+- Nivel **detailed**: rellena `assumptions` en cada ítem de `items` que tenga supuestos específicos (no solo el array global).
+{% endif %}

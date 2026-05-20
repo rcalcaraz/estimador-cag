@@ -122,7 +122,7 @@ flowchart TD
   end
 
   subgraph salida["Respuesta"]
-    ER["EstimationResponse\n(prompt_version según constante)"]
+    ER["EstimationResponse\n(estimation JSON + metadatos)"]
   end
 
   C --> R --> V
@@ -145,7 +145,7 @@ flowchart TD
 2. **Prompts:** `render_estimation_prompt` renderiza `system.j2` y `user.j2` (con `examples.j2` incluido en el system) y devuelve dos cadenas. La constante `ESTIMATION_PROMPT_VERSION` en `llm_service` está alineada con el directorio de plantillas (actualmente **`v1`**).
 3. **Llamada al modelo:** `LLMWrapper` arma la lista de mensajes `[{role: system, ...}, {role: user, ...}]` y delega en LiteLLM (no concatena ambos textos en un solo mensaje).
 4. **Caché:** antes de llamar al proveedor se consulta Redis; si hay hit, se devuelve la estimación guardada con metadatos y `cache_hit: true`.
-5. **Salida:** se normaliza texto, modelo efectivo, proveedor, uso de tokens, tiempo y coste estimado; el router devuelve `EstimationResponse`.
+5. **Salida:** el LLM devuelve JSON; la API lo valida como `StructuredEstimation` y el router responde con `EstimationResponse` (estimación estructurada + metadatos del modelo).
 
 ---
 
@@ -154,7 +154,8 @@ flowchart TD
 El contrato está definido en Pydantic v2 en `app/schemas.py`:
 
 - **`EstimationRequest`**: `description` (20–2000 caracteres), `project_type`, `detail_level`, `output_format` (enums con valores en snake_case, p. ej. `mobile_app`, `summary`, `phases_table`).
-- **`EstimationResponse`**: `text`, `prompt_version` (identifica la versión de plantillas / contrato de prompt expuesto por la API), `model`, `provider` (`openai` \| `anthropic`), `cache_hit`, tokens (`input_tokens`, `output_tokens`, `total_tokens`), `response_time_seconds`, `cost_usd` (opcionales salvo los campos obligatorios del modelo).
+- **`EstimationResponse`**: `estimation` (`StructuredEstimation` con `title`, `items[]`, `totals`, `risks_and_assumptions`, etc.), `prompt_version`, `model`, `provider` (`openai` \| `anthropic`), `cache_hit`, tokens y `cost_usd`.
+- **`StructuredEstimation`**: cuerpo tipado de la estimación (`items` con `confidence_pct` por partida; `totals` con `hours`, `cost` y `confidence_pct` global; opcional `narrative_blocks` para formato narrativo).
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -233,7 +234,8 @@ Archivos de tests destacados:
 
 | Archivo | Qué cubre |
 |---------|-----------|
-| `tests/test_estimate_endpoint.py` | Router `/estimate` (esquema y errores) |
+| `tests/test_estimate_endpoint.py` | Router `/estimate` (respuesta estructurada y errores) |
+| `tests/test_estimation_parser.py` | Parseo y validación del JSON del LLM |
 | `tests/test_llm_wrapper.py` | Wrapper LiteLLM, caché en llamadas simuladas |
 | `tests/test_cache.py` | Claves y TTL de Redis |
 | `tests/test_examples_context.py` | Prompts legacy / ejemplos CAG |
@@ -261,6 +263,7 @@ estimator/
     │       ├── user.j2
     │       └── examples.j2   # Few-shot CAG incluido en system
     ├── services/
+    │   ├── estimation_parser.py  # JSON del LLM → StructuredEstimation
     │   ├── llm_service.py    # complete_estimation, helpers de prompt
     │   ├── llm_wrapper.py    # LiteLLM (router + fallback)
     │   └── cache.py          # Caché Redis

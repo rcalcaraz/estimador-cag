@@ -32,7 +32,7 @@ def test_user_message_includes_description_inside_project_description_block() ->
     assert inner == description.strip()
 
 
-def test_system_phases_table_includes_format_keywords_narrative_does_not() -> None:
+def test_system_includes_json_schema_and_phases_table_rules() -> None:
     common = dict(
         description="Texto de descripción suficientemente largo.",
         detail_level=DetailLevel.SUMMARY,
@@ -45,14 +45,15 @@ def test_system_phases_table_includes_format_keywords_narrative_does_not() -> No
         _request(output_format=OutputFormat.NARRATIVE, **common)
     )
 
+    assert "Formato de salida obligatorio (JSON)" in system_table
+    assert '"confidence_pct"' in system_table
     assert "phases_table" in system_table
-    assert "confidence_pct" in system_table
+    assert "narrative_blocks" in system_narrative
     assert "phases_table" not in system_narrative
-    assert "confidence_pct" not in system_narrative
 
 
-def test_system_detailed_includes_per_phase_assumptions_summary_does_not() -> None:
-    phrase = "por cada fase o hito"
+def test_system_detailed_includes_per_item_assumptions_summary_does_not() -> None:
+    phrase = "Nivel **detailed**"
     common = dict(
         description="Otro texto de descripción que cumple el mínimo.",
         output_format=OutputFormat.NARRATIVE,

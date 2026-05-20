@@ -6,6 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.routers import estimations as estimations_router
+from app.schemas import (
+    EstimationItem,
+    EstimationTotals,
+    StructuredEstimation,
+)
 from app.services.llm_service import ESTIMATION_PROMPT_VERSION, EstimationOutcome
 
 
@@ -21,10 +26,41 @@ def _valid_payload() -> dict:
     }
 
 
+def _sample_structured() -> StructuredEstimation:
+    return StructuredEstimation(
+        title="Estimación panel web",
+        currency="EUR",
+        executive_summary="Proyecto de complejidad media.",
+        items=[
+            EstimationItem(
+                name="Discovery y diseño",
+                hours=40,
+                cost=3200,
+                confidence_pct=75,
+            ),
+            EstimationItem(
+                name="Implementación API y front",
+                hours=120,
+                cost=9600,
+                confidence_pct=65,
+            ),
+        ],
+        totals=EstimationTotals(
+            hours=160,
+            cost=12800,
+            hourly_rate_note="80 €/h orientativo",
+            confidence_pct=70,
+        ),
+        recommended_team="2 full-stack",
+        estimated_duration="8–10 semanas",
+        risks_and_assumptions=["Integración ERP fuera de alcance en v1"],
+    )
+
+
 @pytest.fixture
 def sample_outcome() -> EstimationOutcome:
     return EstimationOutcome(
-        estimation="## Estimación\n\nTotal orientativo: 40 h.",
+        estimation=_sample_structured(),
         model="gpt-4o-mini",
         provider="openai",
         input_tokens=1234,
@@ -55,7 +91,10 @@ def test_estimate_returns_200_and_matches_schema(
     response = client.post("/api/v1/estimate", json=_valid_payload())
     assert response.status_code == 200
     body = response.json()
-    assert body["text"] == sample_outcome.estimation
+    assert body["estimation"]["title"] == sample_outcome.estimation.title
+    assert len(body["estimation"]["items"]) == 2
+    assert body["estimation"]["items"][0]["confidence_pct"] == 75
+    assert body["estimation"]["totals"]["confidence_pct"] == 70
     assert body["prompt_version"] == ESTIMATION_PROMPT_VERSION
     assert body["model"] == sample_outcome.model
     assert body["provider"] == sample_outcome.provider

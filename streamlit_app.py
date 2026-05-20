@@ -6,8 +6,10 @@ Ejecutar desde la raíz del proyecto: streamlit run streamlit_app.py
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
+import pandas as pd
 import streamlit as st
 from pydantic import ValidationError
 
@@ -18,6 +20,7 @@ from app.schemas import (
     EstimationResponse,
     OutputFormat,
     ProjectType,
+    StructuredEstimation,
 )
 from app.services.llm_service import build_system_prompt, format_cag_examples_block
 
@@ -75,11 +78,62 @@ def _post_estimate(base_url: str, req: EstimationRequest) -> EstimationResponse:
     return EstimationResponse.model_validate(response.json())
 
 
+def _items_dataframe(est: StructuredEstimation) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for item in est.items:
+        row: dict[str, Any] = {
+            "Partida": item.name,
+            "Horas": item.hours,
+            f"Coste ({est.currency})": item.cost,
+        }
+        if item.confidence_pct is not None:
+            row["Confianza %"] = item.confidence_pct
+        if item.notes:
+            row["Notas"] = item.notes
+        if item.assumptions:
+            row["Supuestos"] = "; ".join(item.assumptions)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _render_structured_estimation(est: StructuredEstimation) -> None:
+    st.subheader(est.title)
+    if est.executive_summary:
+        st.markdown(est.executive_summary)
+
+    if est.items:
+        st.dataframe(_items_dataframe(est), use_container_width=True, hide_index=True)
+
+    if est.narrative_blocks:
+        for block in est.narrative_blocks:
+            st.markdown(f"#### {block.title}")
+            st.markdown(block.content)
+
+    t1, t2, t3, t4 = st.columns(4)
+    if est.totals.hours is not None:
+        t1.metric("Total horas", f"{est.totals.hours:,.0f}".replace(",", "."))
+    if est.totals.cost is not None:
+        t2.metric("Total coste", f"{est.totals.cost:,.0f} {est.currency}".replace(",", "."))
+    if est.totals.confidence_pct is not None:
+        t3.metric("Confianza global", f"{est.totals.confidence_pct} %")
+    if est.totals.hourly_rate_note:
+        t4.caption(est.totals.hourly_rate_note)
+
+    if est.recommended_team:
+        st.markdown(f"**Equipo recomendado:** {est.recommended_team}")
+    if est.estimated_duration:
+        st.markdown(f"**Duración estimada:** {est.estimated_duration}")
+    if est.risks_and_assumptions:
+        st.markdown("**Riesgos y supuestos**")
+        for risk in est.risks_and_assumptions:
+            st.markdown(f"- {risk}")
+
+
 def _render_cag_sidebar() -> None:
     st.sidebar.header("Transparencia CAG")
     st.sidebar.caption(
         "El servicio incluye rol y ejemplos en el *system*; el formulario se serializa como "
-        "`EstimationRequest` y la UI consume `POST /api/v1/estimate`."
+        "`EstimationRequest` y la UI consume `POST /api/v1/estimate` (JSON estructurado)."
     )
 
     with st.sidebar.expander("System prompt activo (solo lectura)", expanded=False):
@@ -134,7 +188,7 @@ def main() -> None:
     st.set_page_config(page_title="Estimador CAG", page_icon="📋", layout="wide")
     st.title("Estimador de software (CAG)")
     st.caption(
-        "Completa el formulario para enviar un `EstimationRequest`; la estimación se muestra al completar la llamada."
+        "Completa el formulario para enviar un `EstimationRequest`; la estimación llega como JSON estructurado."
     )
 
     _init_session_state()
@@ -192,12 +246,12 @@ def main() -> None:
                 else:
                     st.session_state.last_estimation = result
                     with st.chat_message("assistant"):
-                        st.markdown(result.text)
+                        _render_structured_estimation(result.estimation)
                     st.success("Respuesta completada.")
 
     elif st.session_state.last_estimation is not None:
         with st.chat_message("assistant"):
-            st.markdown(st.session_state.last_estimation.text)
+            _render_structured_estimation(st.session_state.last_estimation.estimation)
 
     _render_cag_sidebar()
 

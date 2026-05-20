@@ -15,7 +15,7 @@ router = APIRouter(tags=["estimaciones"])
 
 def _estimation_response_from_outcome(outcome: EstimationOutcome) -> EstimationResponse:
     return EstimationResponse(
-        text=outcome.estimation,
+        estimation=outcome.estimation,
         prompt_version=ESTIMATION_PROMPT_VERSION,
         model=outcome.model,
         provider=outcome.provider,

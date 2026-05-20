@@ -118,6 +118,7 @@ class LLMWrapper:
         max_tokens: int = 8192,
         thinking_budget: int | None = None,
         temperature: float = 0.3,
+        json_mode: bool = False,
     ) -> dict[str, Any]:
         cache_key_model = model_override or self.primary_model
         cache_key = EstimationCache.make_key(
@@ -141,6 +142,7 @@ class LLMWrapper:
             thinking_budget=thinking_budget,
             model_override=model_override,
             temperature=temperature,
+            json_mode=json_mode,
         )
 
         log.info(
@@ -177,12 +179,15 @@ class LLMWrapper:
         thinking_budget: int | None,
         model_override: str | None,
         temperature: float,
+        json_mode: bool = False,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
 
         if thinking_budget is not None:
             target_model = model_override or self.primary_model

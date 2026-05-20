@@ -12,28 +12,33 @@ from typing import List, Literal, Optional
 
 from app.context.examples import ESTIMATION_EXAMPLES
 from app.dependencies import get_llm_wrapper
-from app.schemas import DetailLevel, EstimationRequest, OutputFormat, ProjectType
+from app.schemas import (
+    DetailLevel,
+    EstimationRequest,
+    OutputFormat,
+    ProjectType,
+    StructuredEstimation,
+)
+from app.services.estimation_parser import parse_structured_estimation
 
 DEFAULT_MAX_TOKENS = 8192
 
 # Versión de las plantillas Jinja en ``app/prompts/<version>/`` (expuesta en la API).
 ESTIMATION_PROMPT_VERSION = "v1"
 
-_SYSTEM_ROLE = """Eres un estimador de software experto. Tu tarea es producir estimaciones de esfuerzo, coste y planificación basándote en:
+_SYSTEM_ROLE = """Eres un estimador de software experto. Tu tarea es producir estimaciones de esfuerzo, coste y planificación en JSON estructurado basándote en:
 
-1. Los ejemplos de estimaciones previas que recibes a continuación (son tu referencia de tono, granularidad y formato).
-2. La transcripción de una nueva reunión con el cliente, que el usuario te enviará en el siguiente mensaje.
+1. Los ejemplos de estimaciones previas que recibes a continuación (referencia de tono, granularidad y cifras).
+2. La descripción de un nuevo proyecto que el usuario te enviará en el siguiente mensaje.
 
-Debes imitar la estructura y el nivel de detalle de los ejemplos: desglose de tareas con horas y costes cuando aplique, totales, equipo recomendado, duración y riesgos o supuestos claros. Si la transcripción es incompleta, indica supuestos explícitos antes de cifrar.
-
-Responde únicamente con la estimación (cuerpo del documento), en el mismo idioma que la transcripción salvo que el cliente pida otro idioma explícitamente."""
+Responde únicamente con el objeto JSON solicitado, en el mismo idioma que la descripción salvo que el cliente pida otro idioma explícitamente."""
 
 
 @dataclass(frozen=True)
 class EstimationOutcome:
     """Resultado de una llamada al LLM para estimar."""
 
-    estimation: str
+    estimation: StructuredEstimation
     model: str
     provider: Literal["openai", "anthropic"]
     input_tokens: Optional[int] = None
@@ -80,7 +85,7 @@ _PROJECT_TYPE_LABEL: dict[ProjectType, str] = {
 }
 
 _DETAIL_LEVEL_HINT: dict[DetailLevel, str] = {
-    DetailLevel.SUMMARY: "Respuesta breve: visionado general, totales aproximados y riesgos clave.",
+    DetailLevel.SUMMARY: "Respuesta breve: visión general, totales aproximados y riesgos clave.",
     DetailLevel.MEDIUM: "Equilibrio entre síntesis y desglose: fases o áreas con orden de magnitud.",
     DetailLevel.DETAILED: "Muy detallado: desglose fino, supuestos explícitos, riesgos y dependencias.",
 }
@@ -117,10 +122,15 @@ def _coerce_provider(raw: str, model: str) -> Literal["openai", "anthropic"]:
     return "openai"
 
 
-def _wrapper_result_to_outcome(result: dict, *, elapsed_s: float) -> EstimationOutcome:
+def _wrapper_result_to_outcome(
+    result: dict,
+    *,
+    elapsed_s: float,
+    structured: StructuredEstimation,
+) -> EstimationOutcome:
     usage = result.get("usage") or {}
     return EstimationOutcome(
-        estimation=(result.get("estimation") or "").strip(),
+        estimation=structured,
         model=result.get("model") or "",
         provider=_coerce_provider(result.get("provider") or "", result.get("model") or ""),
         input_tokens=usage.get("input_tokens"),
@@ -135,7 +145,7 @@ def _wrapper_result_to_outcome(result: dict, *, elapsed_s: float) -> EstimationO
 async def complete_estimation(system_prompt: str, user_message: str) -> EstimationOutcome:
     """
     Llama al wrapper LiteLLM con ``role=system`` y ``role=user`` como mensajes separados
-    (no concatenados).
+    (no concatenados). La salida del modelo se parsea a :class:`StructuredEstimation`.
 
     El router LiteLLM usa ``PRIMARY_MODEL`` (OpenAI) y ``FALLBACK_MODEL`` (Anthropic);
     el orden depende de ``LLM_PROVIDER``. Se requiere al menos una API key (fallback opcional).
@@ -150,13 +160,19 @@ async def complete_estimation(system_prompt: str, user_message: str) -> Estimati
         max_tokens=DEFAULT_MAX_TOKENS,
         thinking_budget=None,
         temperature=0.3,
+        json_mode=True,
     )
     wall_s = time.perf_counter() - t0
     latency_ms = result.get("latency_ms")
     elapsed_s = (latency_ms / 1000.0) if isinstance(latency_ms, int) else wall_s
 
-    rendered = (result.get("estimation") or "").strip()
-    if not rendered:
+    raw = (result.get("estimation") or "").strip()
+    if not raw:
         raise RuntimeError("El proveedor devolvió contenido vacío")
 
-    return _wrapper_result_to_outcome({**result, "estimation": rendered}, elapsed_s=elapsed_s)
+    try:
+        structured = parse_structured_estimation(raw)
+    except ValueError as e:
+        raise ValueError(f"No se pudo interpretar la estimación del modelo: {e}") from e
+
+    return _wrapper_result_to_outcome(result, elapsed_s=elapsed_s, structured=structured)
