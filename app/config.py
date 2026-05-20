@@ -53,6 +53,26 @@ class Settings(BaseSettings):
     )
     cache_ttl: int = Field(default=86400, description="TTL de la caché (segundos).")
 
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="Modelo OpenAI para embeddings de la caché semántica.",
+    )
+    semantic_cache_threshold: float = Field(
+        default=0.85,
+        description="Umbral de similitud coseno (0..1) para hit en caché semántica.",
+    )
+    semantic_cache_ttl: int = Field(
+        default=86400,
+        description="TTL de entradas en la caché semántica (segundos).",
+    )
+    semantic_cache_log_only: bool = Field(
+        default=False,
+        description=(
+            "Si es true, registra hits potenciales pero no los sirve "
+            "(calibración del umbral)."
+        ),
+    )
+
     estimator_api_base_url: str = Field(
         default="http://127.0.0.1:8000",
         description="URL base de la API FastAPI (cliente Streamlit vía HTTP).",

@@ -3,15 +3,16 @@ from dataclasses import replace
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.dependencies import get_openai_client
+from app.dependencies import get_openai_client, get_semantic_cache
 from app.guardrails.input import InputGuardrailViolation, check_input
 from app.guardrails.output import enforce_scope_response
 from app.prompts.loader import render_estimation_prompt
-from app.schemas import EstimationRequest, EstimationResponse
+from app.schemas import CacheKind, EstimationRequest, EstimationResponse
 from app.services.llm_service import (
     ESTIMATION_PROMPT_VERSION,
     EstimationOutcome,
     complete_estimation,
+    try_exact_cache_lookup,
 )
 
 log = structlog.get_logger()
@@ -24,7 +25,8 @@ def _estimation_response_from_outcome(outcome: EstimationOutcome) -> EstimationR
         prompt_version=ESTIMATION_PROMPT_VERSION,
         model=outcome.model,
         provider=outcome.provider,
-        cache_hit=outcome.cache_hit,
+        cache_hit=outcome.cache_kind != CacheKind.NONE,
+        cache_kind=outcome.cache_kind,
         input_tokens=outcome.input_tokens,
         output_tokens=outcome.output_tokens,
         total_tokens=outcome.total_tokens,
@@ -64,12 +66,43 @@ async def estimate(
         ) from exc
 
     system_prompt, user_message = render_estimation_prompt(body)
+
+    exact_outcome = try_exact_cache_lookup(system_prompt, user_message)
+    if exact_outcome is not None:
+        log.info("estimation_cache_hit", kind="exact")
+        outcome = replace(
+            exact_outcome,
+            estimation=enforce_scope_response(exact_outcome.estimation),
+        )
+        return _estimation_response_from_outcome(outcome)
+
+    semantic_cache = get_semantic_cache()
+    if semantic_cache is not None:
+        semantic_hit = semantic_cache.lookup(body, ESTIMATION_PROMPT_VERSION)
+        if semantic_hit is not None:
+            log.info("estimation_cache_hit", kind="semantic")
+            outcome = EstimationOutcome(
+                estimation=enforce_scope_response(semantic_hit.estimation),
+                model=semantic_hit.model,
+                provider=semantic_hit.provider,
+                cache_kind=CacheKind.SEMANTIC,
+            )
+            return _estimation_response_from_outcome(outcome)
+
     try:
         outcome = await complete_estimation(system_prompt, user_message)
         outcome = replace(
             outcome,
             estimation=enforce_scope_response(outcome.estimation),
         )
+        if semantic_cache is not None:
+            semantic_cache.store(
+                body,
+                outcome.estimation,
+                ESTIMATION_PROMPT_VERSION,
+                model=outcome.model,
+                provider=outcome.provider,
+            )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:

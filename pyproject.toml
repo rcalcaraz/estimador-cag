@@ -10,6 +10,8 @@ dependencies = [
     "pydantic-settings",
     "litellm>=1.55.0",
     "redis>=5.0.0",
+    "redisvl>=0.3",
+    "numpy>=1.24",
     "anthropic",
     "openai",
     "python-dotenv",

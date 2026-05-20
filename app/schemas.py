@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from enum import Enum
 from typing import Any, Literal, Optional
 
@@ -21,6 +23,14 @@ class OutputFormat(str, Enum):
     PHASES_TABLE = "phases_table"
     LINE_ITEMS = "line_items"
     NARRATIVE = "narrative"
+
+
+class CacheKind(str, Enum):
+    """Origen de la respuesta respecto a la caché."""
+
+    NONE = "none"
+    EXACT = "exact"
+    SEMANTIC = "semantic"
 
 
 OUT_OF_SCOPE_PREFIX = "Out of scope:"
@@ -130,9 +140,10 @@ class StructuredEstimation(BaseModel):
 class EstimationResponse(BaseModel):
     estimation: StructuredEstimation
     prompt_version: str
-    model: str
-    provider: Literal["openai", "anthropic"]
+    model: Optional[str] = None
+    provider: Optional[Literal["openai", "anthropic"]] = None
     cache_hit: bool
+    cache_kind: CacheKind = CacheKind.NONE
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
@@ -141,9 +152,21 @@ class EstimationResponse(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_legacy_estimation(cls, data: Any) -> Any:
-        if isinstance(data, dict) and isinstance(data.get("estimation"), dict):
-            payload = dict(data)
+    def _coerce_legacy_payload(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        if isinstance(payload.get("estimation"), dict):
             payload["estimation"] = normalize_estimation_dict(payload["estimation"])
-            return payload
-        return data
+        if "cache_kind" not in payload:
+            payload["cache_kind"] = (
+                CacheKind.EXACT.value if payload.get("cache_hit") else CacheKind.NONE.value
+            )
+        return payload
+
+    @model_validator(mode="after")
+    def _sync_cache_hit_flag(self) -> EstimationResponse:
+        expected_hit = self.cache_kind != CacheKind.NONE
+        if self.cache_hit != expected_hit:
+            return self.model_copy(update={"cache_hit": expected_hit})
+        return self

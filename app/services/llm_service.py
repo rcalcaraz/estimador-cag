@@ -10,9 +10,15 @@ import time
 from dataclasses import dataclass
 from typing import List, Literal, Optional
 
+import structlog
+
 from app.context.examples import ESTIMATION_EXAMPLES
+
+log = structlog.get_logger()
 from app.dependencies import get_llm_wrapper
+from app.services.cache import EstimationCache
 from app.schemas import (
+    CacheKind,
     DetailLevel,
     EstimationRequest,
     OutputFormat,
@@ -39,14 +45,14 @@ class EstimationOutcome:
     """Resultado de una llamada al LLM para estimar."""
 
     estimation: StructuredEstimation
-    model: str
-    provider: Literal["openai", "anthropic"]
+    model: Optional[str] = None
+    provider: Optional[Literal["openai", "anthropic"]] = None
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
     response_time_seconds: Optional[float] = None
     cost_usd: Optional[float] = None
-    cache_hit: bool = False
+    cache_kind: CacheKind = CacheKind.NONE
 
 
 def get_system_role_prompt() -> str:
@@ -138,8 +144,41 @@ def _wrapper_result_to_outcome(
         total_tokens=usage.get("total_tokens"),
         response_time_seconds=elapsed_s,
         cost_usd=result.get("cost_usd"),
-        cache_hit=bool(result.get("cache_hit")),
+        cache_kind=CacheKind.EXACT if result.get("cache_hit") else CacheKind.NONE,
     )
+
+
+def try_exact_cache_lookup(system_prompt: str, user_message: str) -> EstimationOutcome | None:
+    """
+    Consulta la caché exacta (system + user + modelo) sin llamar al LLM.
+    Debe ejecutarse antes que la caché semántica en el router.
+    """
+    wrapper = get_llm_wrapper()
+    cache_key = EstimationCache.make_key(
+        system_prompt=system_prompt,
+        user_message=user_message,
+        model=wrapper.primary_model,
+        max_tokens=DEFAULT_MAX_TOKENS,
+        thinking_budget=None,
+    )
+    cached = wrapper.cache.get(cache_key)
+    if not cached:
+        return None
+
+    result = {**cached, "cache_hit": True}
+    raw = (result.get("estimation") or "").strip()
+    if not raw:
+        return None
+
+    try:
+        structured = parse_structured_estimation(raw)
+    except ValueError:
+        log.warning("exact_cache_parse_failed", key_prefix=cache_key[:24])
+        return None
+
+    latency_ms = result.get("latency_ms")
+    elapsed_s = (latency_ms / 1000.0) if isinstance(latency_ms, int) else 0.0
+    return _wrapper_result_to_outcome(result, elapsed_s=elapsed_s, structured=structured)
 
 
 async def complete_estimation(system_prompt: str, user_message: str) -> EstimationOutcome:

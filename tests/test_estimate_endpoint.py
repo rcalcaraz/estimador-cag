@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.routers import estimations as estimations_router
-from app.schemas import EstimationPhase, EstimationTotals, StructuredEstimation
+from app.schemas import CacheKind, EstimationPhase, EstimationTotals, StructuredEstimation
 from app.services.llm_service import ESTIMATION_PROMPT_VERSION, EstimationOutcome
 
 
@@ -59,7 +59,7 @@ def sample_outcome() -> EstimationOutcome:
         total_tokens=1801,
         response_time_seconds=0.42,
         cost_usd=0.001234,
-        cache_hit=False,
+        cache_kind=CacheKind.NONE,
     )
 
 
@@ -90,6 +90,7 @@ def test_estimate_returns_200_and_matches_schema(
     assert body["model"] == sample_outcome.model
     assert body["provider"] == sample_outcome.provider
     assert body["cache_hit"] is False
+    assert body["cache_kind"] == "none"
     assert body["cost_usd"] == pytest.approx(0.001234)
     assert body["total_tokens"] == 1801
 
@@ -126,3 +127,105 @@ def test_estimate_prompt_injection_returns_400(
     detail = response.json()["detail"]
     assert detail["reason"] == "prompt_injection"
     assert "message" in detail
+
+
+def test_estimate_exact_cache_checked_before_semantic(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    sample_outcome: EstimationOutcome,
+) -> None:
+    from app.cache.semantic import SemanticCacheHit
+
+    exact_outcome = EstimationOutcome(
+        estimation=sample_outcome.estimation,
+        model=sample_outcome.model,
+        provider=sample_outcome.provider,
+        cache_kind=CacheKind.EXACT,
+    )
+
+    class FakeSemanticCache:
+        def lookup(self, request, prompt_version: str):
+            raise AssertionError("semantic lookup no debe ejecutarse si la exacta acierta")
+
+        def store(self, *args, **kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(
+        estimations_router,
+        "try_exact_cache_lookup",
+        lambda _s, _u: exact_outcome,
+    )
+    monkeypatch.setattr(estimations_router, "get_semantic_cache", lambda: FakeSemanticCache())
+
+    async def fail_if_called(_system: str, _user: str) -> EstimationOutcome:
+        raise AssertionError("complete_estimation no debe llamarse en hit exacto")
+
+    monkeypatch.setattr(estimations_router, "complete_estimation", fail_if_called)
+
+    response = client.post("/api/v1/estimate", json=_valid_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cache_kind"] == "exact"
+
+
+def test_estimate_semantic_cache_hit_returns_cache_kind_semantic(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    sample_outcome: EstimationOutcome,
+) -> None:
+    from app.cache.semantic import SemanticCacheHit
+
+    class FakeSemanticCache:
+        def lookup(self, request, prompt_version: str):
+            return SemanticCacheHit(
+                estimation=sample_outcome.estimation,
+                model="gpt-4o-mini",
+                provider="openai",
+            )
+
+        def store(self, request, result, prompt_version: str, **kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(estimations_router, "get_semantic_cache", lambda: FakeSemanticCache())
+    monkeypatch.setattr(estimations_router, "try_exact_cache_lookup", lambda _s, _u: None)
+
+    async def fail_if_called(_system: str, _user: str) -> EstimationOutcome:
+        raise AssertionError("complete_estimation no debe llamarse en hit semántico")
+
+    monkeypatch.setattr(estimations_router, "complete_estimation", fail_if_called)
+
+    response = client.post("/api/v1/estimate", json=_valid_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cache_hit"] is True
+    assert body["cache_kind"] == "semantic"
+    assert body["model"] == "gpt-4o-mini"
+    assert body["provider"] == "openai"
+    assert body["input_tokens"] is None
+
+
+def test_estimate_exact_cache_hit_returns_cache_kind_exact(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    sample_outcome: EstimationOutcome,
+) -> None:
+    monkeypatch.setattr(estimations_router, "get_semantic_cache", lambda: None)
+    monkeypatch.setattr(estimations_router, "try_exact_cache_lookup", lambda _s, _u: None)
+
+    exact_outcome = EstimationOutcome(
+        estimation=sample_outcome.estimation,
+        model=sample_outcome.model,
+        provider=sample_outcome.provider,
+        cache_kind=CacheKind.EXACT,
+    )
+
+    async def fake_complete(_system: str, _user: str) -> EstimationOutcome:
+        return exact_outcome
+
+    monkeypatch.setattr(estimations_router, "complete_estimation", fake_complete)
+
+    response = client.post("/api/v1/estimate", json=_valid_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cache_hit"] is True
+    assert body["cache_kind"] == "exact"

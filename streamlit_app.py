@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 from app.schemas import (
+    CacheKind,
     DetailLevel,
     EstimationRequest,
     EstimationResponse,
@@ -331,6 +332,41 @@ def _format_cost_usd(value: float | None) -> str:
     return f"${value:.6f}"
 
 
+def _format_model_label(response: EstimationResponse) -> str:
+    if response.model:
+        return response.model
+    if response.cache_kind == CacheKind.SEMANTIC:
+        return "— (caché semántica; sin llamada al LLM)"
+    return "—"
+
+
+def _format_provider_label(response: EstimationResponse) -> str:
+    if response.provider:
+        return response.provider
+    if response.cache_kind in (CacheKind.SEMANTIC, CacheKind.EXACT):
+        return "— (respuesta desde caché)"
+    return "—"
+
+
+def _cache_kind_label(kind: CacheKind) -> str:
+    if kind == CacheKind.SEMANTIC:
+        return "Caché semántica (similitud vectorial)"
+    if kind == CacheKind.EXACT:
+        return "Caché exacta (clave SHA-256)"
+    return "Sin caché — llamada al modelo"
+
+
+def _render_cache_status(response: EstimationResponse) -> None:
+    """Badge visible en la vista principal y coherente con el sidebar."""
+    kind = response.cache_kind
+    if kind == CacheKind.SEMANTIC:
+        st.success(f"**Respuesta desde caché:** {_cache_kind_label(kind)}")
+    elif kind == CacheKind.EXACT:
+        st.success(f"**Respuesta desde caché:** {_cache_kind_label(kind)}")
+    else:
+        st.info(_cache_kind_label(kind))
+
+
 def _render_cag_sidebar() -> None:
     st.sidebar.header("Metadatos")
     last: EstimationResponse | None = st.session_state.last_estimation
@@ -339,10 +375,14 @@ def _render_cag_sidebar() -> None:
         return
 
     st.sidebar.caption(f"**prompt_version:** `{last.prompt_version}`")
-    if last.cache_hit:
-        st.sidebar.success("Caché Redis")
+    kind = last.cache_kind
+    if kind == CacheKind.SEMANTIC:
+        st.sidebar.success(_cache_kind_label(kind))
+    elif kind == CacheKind.EXACT:
+        st.sidebar.success(_cache_kind_label(kind))
     else:
-        st.sidebar.info("Llamada directa al modelo")
+        st.sidebar.info(_cache_kind_label(kind))
+    st.sidebar.caption(f"**cache_kind:** `{kind.value}` · **cache_hit:** `{last.cache_hit}`")
 
     st.sidebar.metric("Tokens totales", _format_token_value(_total_tokens(last)))
     st.sidebar.metric("Coste solicitud", _format_cost_usd(last.cost_usd))
@@ -351,8 +391,8 @@ def _render_cag_sidebar() -> None:
         f"Desglose: **{_format_token_value(last.input_tokens)}** in · "
         f"**{_format_token_value(last.output_tokens)}** out"
     )
-    st.sidebar.metric("Modelo", last.model)
-    st.sidebar.caption(f"Proveedor: **{last.provider}**")
+    st.sidebar.metric("Modelo", _format_model_label(last))
+    st.sidebar.caption(f"Proveedor: **{_format_provider_label(last)}**")
     if last.response_time_seconds is not None:
         t = last.response_time_seconds
         st.sidebar.metric("Tiempo", f"{t:.2f} s" if t < 60 else f"{t / 60:.1f} min")
@@ -430,7 +470,9 @@ def main() -> None:
     has_result = st.session_state.last_estimation is not None and not st.session_state.show_form
 
     if has_result:
-        _render_estimation_dashboard(st.session_state.last_estimation.estimation)
+        last = st.session_state.last_estimation
+        _render_cache_status(last)
+        _render_estimation_dashboard(last.estimation)
         st.markdown('<div class="est-new-btn"></div>', unsafe_allow_html=True)
         if st.button("← New estimation"):
             st.session_state.show_form = True
