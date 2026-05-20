@@ -8,7 +8,7 @@ Las llamadas al modelo pasan por un **wrapper LiteLLM** (`app/services/llm_wrapp
 
 La forma prevista de ejecutar el proyecto es **con Docker**: misma versión de Python y dependencias para todo el mundo, sin instalar `uv` ni un virtualenv en la máquina host.
 
-Opcionalmente hay una **interfaz con formulario** en Streamlit (perfil `ui` en Compose): construye un `EstimationRequest`, hace **streaming** con `POST .../api/v1/estimate/stream` (NDJSON) y el panel lateral muestra **transparencia CAG** (vista de rol + ejemplos coherente con la ruta de streaming), **tokens**, modelo, **caché** y tiempo de respuesta. La URL base de la API se configura con **`ESTIMATOR_API_BASE_URL`** (en Compose apunta al servicio `estimator` en la red Docker).
+Opcionalmente hay una **interfaz con formulario** en Streamlit (perfil `ui` en Compose): construye un `EstimationRequest`, llama a `POST .../api/v1/estimate` y el panel lateral muestra **transparencia CAG** (vista de rol + ejemplos), **tokens**, modelo, **caché** y tiempo de respuesta. La URL base de la API se configura con **`ESTIMATOR_API_BASE_URL`** (en Compose apunta al servicio `estimator` en la red Docker).
 
 **Redis** arranca **siempre** con Compose: la API y Streamlit usan **`REDIS_URL=redis://redis:6379`** en la red Docker (el `docker-compose.yml` lo inyecta y no hace falta cambiar el `.env` para eso). Sin Redis en marcha la caché falla y verás `cache_get_failed` en los logs.
 
@@ -115,11 +115,6 @@ flowchart TD
     CE["complete_estimation"]
   end
 
-  subgraph stream["POST /estimate/stream"]
-    B["build_system_prompt +\nbuild_estimation_user_message"]
-    ST["stream_estimation"]
-  end
-
   subgraph llm["LLMWrapper"]
     CACHE{"¿Redis tiene\nrespuesta?"}
     MISS["LiteLLM Router\n(OpenAI ↔ Anthropic)"]
@@ -138,10 +133,7 @@ flowchart TD
   SYS --> CE
   USR --> CE
 
-  V --> B --> ST
-
   CE --> CACHE
-  ST --> CACHE
 
   CACHE -->|hit| ER
   CACHE -->|miss| MISS --> NORM --> ER
@@ -150,12 +142,10 @@ flowchart TD
 ### Pasos detallados
 
 1. **Entrada:** el cuerpo JSON se valida contra `EstimationRequest` (longitud de `description`, enums en snake_case).
-2. **Prompts:**
-   - **`POST /api/v1/estimate`:** `render_estimation_prompt` renderiza `system.j2` y `user.j2` (con `examples.j2` incluido en el system) y devuelve dos cadenas. La constante `ESTIMATION_PROMPT_VERSION` en `llm_service` está alineada con el directorio de plantillas (actualmente **`v1`**).
-   - **`POST /api/v1/estimate/stream`:** el servicio construye system y user en Python (`build_system_prompt`, `build_estimation_user_message`) y llama al streaming del wrapper. La línea final NDJSON incluye el mismo campo `prompt_version` por construcción de la respuesta; la UI lateral muestra el bloque estático equivalente al stream para transparencia.
+2. **Prompts:** `render_estimation_prompt` renderiza `system.j2` y `user.j2` (con `examples.j2` incluido en el system) y devuelve dos cadenas. La constante `ESTIMATION_PROMPT_VERSION` en `llm_service` está alineada con el directorio de plantillas (actualmente **`v1`**).
 3. **Llamada al modelo:** `LLMWrapper` arma la lista de mensajes `[{role: system, ...}, {role: user, ...}]` y delega en LiteLLM (no concatena ambos textos en un solo mensaje).
 4. **Caché:** antes de llamar al proveedor se consulta Redis; si hay hit, se devuelve la estimación guardada con metadatos y `cache_hit: true`.
-5. **Salida:** se normaliza texto, modelo efectivo, proveedor, uso de tokens, tiempo y coste estimado; el router devuelve `EstimationResponse` (o NDJSON en streaming).
+5. **Salida:** se normaliza texto, modelo efectivo, proveedor, uso de tokens, tiempo y coste estimado; el router devuelve `EstimationResponse`.
 
 ---
 
@@ -169,8 +159,7 @@ El contrato está definido en Pydantic v2 en `app/schemas.py`:
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | `GET` | `/health` | Comprueba que el servicio responde |
-| `POST` | `/api/v1/estimate` | Cuerpo JSON `EstimationRequest`; respuesta JSON única `EstimationResponse`. Prompts vía **Jinja** (`v1`). |
-| `POST` | `/api/v1/estimate/stream` | Mismo cuerpo; respuesta **NDJSON**: líneas `{"type":"delta","text":"..."}` y una línea final `{"type":"final", ...}` con el mismo esquema que `EstimationResponse`. Prompts vía funciones en **`llm_service`** (streaming). |
+| `POST` | `/api/v1/estimate` | Cuerpo JSON `EstimationRequest`; respuesta JSON `EstimationResponse`. Prompts vía **Jinja** (`v1`). |
 
 Ejemplo (API ya levantada):
 
@@ -244,7 +233,7 @@ Archivos de tests destacados:
 
 | Archivo | Qué cubre |
 |---------|-----------|
-| `tests/test_estimate_endpoint.py` | Router `/estimate` y `/estimate/stream` (esquema y errores) |
+| `tests/test_estimate_endpoint.py` | Router `/estimate` (esquema y errores) |
 | `tests/test_llm_wrapper.py` | Wrapper LiteLLM, caché en llamadas simuladas |
 | `tests/test_cache.py` | Claves y TTL de Redis |
 | `tests/test_examples_context.py` | Prompts legacy / ejemplos CAG |
@@ -257,14 +246,14 @@ Archivos de tests destacados:
 ```text
 estimator/
 ├── Dockerfile / docker-compose.yml
-├── streamlit_app.py          # Formulario web → POST /api/v1/estimate/stream (NDJSON)
+├── streamlit_app.py          # Formulario web → POST /api/v1/estimate
 ├── tests/                    # pytest (salud, caché, wrapper LLM, router estimaciones)
 └── app/
     ├── main.py               # FastAPI, lifespan, GET /health
     ├── config.py             # Ajustes desde .env
     ├── schemas.py            # Contrato API (Pydantic): request/response y enums
     ├── dependencies.py       # Singletons: caché y wrapper LLM
-    ├── routers/estimations.py   # POST /estimate, /estimate/stream
+    ├── routers/estimations.py   # POST /estimate
     ├── prompts/
     │   ├── loader.py         # render_estimation_prompt → (system, user)
     │   └── v1/
@@ -272,8 +261,8 @@ estimator/
     │       ├── user.j2
     │       └── examples.j2   # Few-shot CAG incluido en system
     ├── services/
-    │   ├── llm_service.py    # complete_estimation, streaming, helpers de prompt
-    │   ├── llm_wrapper.py    # LiteLLM (router + fallback + streaming async)
+    │   ├── llm_service.py    # complete_estimation, helpers de prompt
+    │   ├── llm_wrapper.py    # LiteLLM (router + fallback)
     │   └── cache.py          # Caché Redis
     └── context/examples.py   # Datos de ejemplos de estimación (CAG)
 ```

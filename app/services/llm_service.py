@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from app.context.examples import ESTIMATION_EXAMPLES
 from app.dependencies import get_llm_wrapper
@@ -129,51 +129,6 @@ def _wrapper_result_to_outcome(result: dict, *, elapsed_s: float) -> EstimationO
         response_time_seconds=elapsed_s,
         cost_usd=result.get("cost_usd"),
         cache_hit=bool(result.get("cache_hit")),
-    )
-
-
-async def stream_estimation(
-    body: EstimationRequest,
-    *,
-    outcome_holder: List[EstimationOutcome],
-) -> AsyncIterator[str]:
-    """
-    Igual que :func:`complete_estimation`, pero emite la estimación por fragmentos (streaming).
-
-    Tras consumir el iterador, el resultado completo y metadatos quedan en *outcome_holder*
-    (tokens, caché, coste y modelo efectivo según el wrapper LiteLLM).
-    """
-    user_message = build_estimation_user_message(body)
-
-    system_prompt = build_system_prompt()
-    wrapper = get_llm_wrapper()
-
-    stream_meta: dict[str, Any] = {}
-    t0 = time.perf_counter()
-    parts: List[str] = []
-
-    async for piece in wrapper.acomplete_stream(
-        system_prompt=system_prompt,
-        user_message=user_message,
-        model_override=None,
-        max_tokens=DEFAULT_MAX_TOKENS,
-        temperature=0.3,
-        stream_meta=stream_meta,
-    ):
-        parts.append(piece)
-        yield piece
-
-    elapsed = time.perf_counter() - t0
-    rendered = "".join(parts).strip()
-    if not rendered:
-        raise RuntimeError("El proveedor devolvió contenido vacío")
-
-    outcome_holder.clear()
-    outcome_holder.append(
-        _wrapper_result_to_outcome(
-            {**stream_meta, "estimation": rendered},
-            elapsed_s=elapsed,
-        )
     )
 
 

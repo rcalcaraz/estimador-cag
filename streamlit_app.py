@@ -1,13 +1,11 @@
 """
-Interfaz Streamlit para el estimador CAG: formulario tipado, streaming NDJSON vía API y panel de metadatos.
+Interfaz Streamlit para el estimador CAG: formulario tipado, POST JSON a la API y panel de metadatos.
 Ejecutar desde la raíz del proyecto: streamlit run streamlit_app.py
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from typing import List
 
 import httpx
 import streamlit as st
@@ -54,45 +52,34 @@ def _format_token_value(value: int | None) -> str:
     return f"{value:,}".replace(",", ".")
 
 
-def _stream_estimate_deltas(
-    base_url: str,
-    req: EstimationRequest,
-    final_out: List[EstimationResponse],
-) -> Iterator[str]:
-    """Emite fragmentos de texto; al terminar deja la respuesta completa en *final_out*."""
-    url = base_url.rstrip("/") + "/api/v1/estimate/stream"
+def _post_estimate(base_url: str, req: EstimationRequest) -> EstimationResponse:
+    """Llama a POST /api/v1/estimate y devuelve la respuesta tipada."""
+    url = base_url.rstrip("/") + "/api/v1/estimate"
     payload = req.model_dump(mode="json")
     timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
     with httpx.Client(timeout=timeout) as client:
-        with client.stream(
-            "POST",
+        response = client.post(
             url,
             json=payload,
             headers={"Content-Type": "application/json"},
-        ) as response:
-            if response.status_code >= 400:
-                detail = response.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"HTTP {response.status_code}: {detail}")
-            for line in response.iter_lines():
-                if not line.strip():
-                    continue
-                msg = json.loads(line)
-                mtype = msg.get("type")
-                if mtype == "delta" and msg.get("text"):
-                    yield msg["text"]
-                elif mtype == "final":
-                    data = {k: v for k, v in msg.items() if k != "type"}
-                    final_out.clear()
-                    final_out.append(EstimationResponse.model_validate(data))
-                elif mtype == "error":
-                    raise RuntimeError(msg.get("detail", "Error del servicio"))
+        )
+    if response.status_code >= 400:
+        detail = response.text
+        try:
+            body = response.json()
+            if isinstance(body, dict) and "detail" in body:
+                detail = str(body["detail"])
+        except json.JSONDecodeError:
+            pass
+        raise RuntimeError(f"HTTP {response.status_code}: {detail}")
+    return EstimationResponse.model_validate(response.json())
 
 
 def _render_cag_sidebar() -> None:
     st.sidebar.header("Transparencia CAG")
     st.sidebar.caption(
         "El servicio incluye rol y ejemplos en el *system*; el formulario se serializa como "
-        "`EstimationRequest` y la UI consume el stream NDJSON de `/estimate/stream`."
+        "`EstimationRequest` y la UI consume `POST /api/v1/estimate`."
     )
 
     with st.sidebar.expander("System prompt activo (solo lectura)", expanded=False):
@@ -147,7 +134,7 @@ def main() -> None:
     st.set_page_config(page_title="Estimador CAG", page_icon="📋", layout="wide")
     st.title("Estimador de software (CAG)")
     st.caption(
-        "Completa el formulario para enviar un `EstimationRequest`; la estimación se muestra en **streaming**."
+        "Completa el formulario para enviar un `EstimationRequest`; la estimación se muestra al completar la llamada."
     )
 
     _init_session_state()
@@ -155,7 +142,7 @@ def main() -> None:
     api_base = settings.estimator_api_base_url
 
     with st.sidebar.expander("Conexión", expanded=False):
-        st.caption(f"Stream NDJSON `{api_base.rstrip('/')}/api/v1/estimate/stream`")
+        st.caption(f"API `{api_base.rstrip('/')}/api/v1/estimate`")
 
     with st.form("estimation_form"):
         description = st.text_area(
@@ -197,22 +184,16 @@ def main() -> None:
             st.error("Revisa los datos del formulario.")
             st.json(json.loads(e.json()))
         else:
-            final_holder: list[EstimationResponse] = []
-
-            def chunk_iter() -> Iterator[str]:
-                yield from _stream_estimate_deltas(api_base, req, final_holder)
-
-            try:
-                with st.chat_message("assistant"):
-                    st.write_stream(chunk_iter)
-            except RuntimeError as e:
-                st.error(str(e))
-            else:
-                if final_holder:
-                    st.session_state.last_estimation = final_holder[0]
-                    st.success("Respuesta completada.")
+            with st.spinner("Generando estimación…"):
+                try:
+                    result = _post_estimate(api_base, req)
+                except RuntimeError as e:
+                    st.error(str(e))
                 else:
-                    st.warning("El stream terminó sin una línea `final` válida.")
+                    st.session_state.last_estimation = result
+                    with st.chat_message("assistant"):
+                        st.markdown(result.text)
+                    st.success("Respuesta completada.")
 
     elif st.session_state.last_estimation is not None:
         with st.chat_message("assistant"):

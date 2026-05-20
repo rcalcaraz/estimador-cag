@@ -1,8 +1,5 @@
-import json
-
 import structlog
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
 
 from app.prompts.loader import render_estimation_prompt
 from app.schemas import EstimationRequest, EstimationResponse
@@ -10,7 +7,6 @@ from app.services.llm_service import (
     ESTIMATION_PROMPT_VERSION,
     EstimationOutcome,
     complete_estimation,
-    stream_estimation,
 )
 
 log = structlog.get_logger()
@@ -51,37 +47,3 @@ async def estimate(body: EstimationRequest) -> EstimationResponse:
         ) from e
 
     return _estimation_response_from_outcome(outcome)
-
-
-@router.post("/estimate/stream")
-async def estimate_stream(body: EstimationRequest) -> StreamingResponse:
-    """
-    Igual que ``POST /estimate`` pero devuelve NDJSON: líneas ``{"type":"delta","text":"..."}``
-    y una última línea ``{"type":"final", ...}`` con el mismo cuerpo que :class:`EstimationResponse`.
-    """
-
-    async def ndjson_bytes():
-        try:
-            outcome_holder: list[EstimationOutcome] = []
-            async for piece in stream_estimation(body, outcome_holder=outcome_holder):
-                line = json.dumps({"type": "delta", "text": piece}, ensure_ascii=False) + "\n"
-                yield line.encode("utf-8")
-            if not outcome_holder:
-                raise RuntimeError("No se obtuvo resultado del stream")
-            resp = _estimation_response_from_outcome(outcome_holder[0])
-            final_payload = resp.model_dump(mode="json")
-            final_payload["type"] = "final"
-            yield (json.dumps(final_payload, ensure_ascii=False) + "\n").encode("utf-8")
-        except ValueError as e:
-            err = {"type": "error", "code": 400, "detail": str(e)}
-            yield (json.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
-        except Exception as e:
-            log.error("estimation_stream_error", error=str(e))
-            err = {
-                "type": "error",
-                "code": 502,
-                "detail": f"Error al llamar al proveedor LLM: {e!s}",
-            }
-            yield (json.dumps(err, ensure_ascii=False) + "\n").encode("utf-8")
-
-    return StreamingResponse(ndjson_bytes(), media_type="application/x-ndjson")
